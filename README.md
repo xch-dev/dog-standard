@@ -3,7 +3,7 @@
 DOG is a fungible token standard for the Chia blockchain. Like a CAT, a DOG asset is defined by a TAIL that decides when tokens can be issued or melted, and tokens are controlled by an inner puzzle. Unlike a CAT:
 
 - **Tokens don't need mojos.** Issuing and holding tokens costs no XCH beyond transaction fees, and a single coin can hold up to `u64::MAX` tokens, so the token amount doesn't need to be a multiple of mojos (CATs use 1000 mojos per token).
-- **Metadata is part of the asset.** The asset id commits to the name, symbol, decimals, and content hashes of the asset, so they can be verified without a registry.
+- **Metadata is part of the asset.** The asset id commits to the decimals and the genesis name, symbol, and content hashes of the asset, so they can be verified without a registry. The issuer can choose to let a singleton update the name, symbol and icon later, with every update on chain, and lock them permanently.
 - **The TAIL is simpler.** It's given the change in supply, and returns the conditions that authorize it.
 
 DOGs work with the same inner puzzles as CATs, including the settlement payments puzzle used by offers.
@@ -77,18 +77,53 @@ The TAIL can't change a coin's amount without its owner's consent. The owner's i
 The asset id is the tree hash of the pair `(TAIL . METADATA)`, where the metadata is:
 
 ```
-(name symbol decimals image_hash data_hash)
+(decimals (name symbol image_hash data_hash) updater)
 ```
 
-`image_hash` and `data_hash` are optional SHA-256 hashes of the icon and of a document with extra information (such as a description and links). Since the metadata is part of the asset id, two assets with the same TAIL but different metadata are different assets, and the metadata can never change.
+- `decimals` is permanent. Every ecosystem treats it that way, since changing it would change every balance.
+- `(name symbol image_hash data_hash)` is the **genesis info**. `image_hash` and `data_hash` are optional SHA-256 hashes of the icon and of a document with extra information (such as a description and links).
+- `updater` is nil, or the launcher id of a **metadata updater** singleton, whose owner can replace the genesis info (but not the decimals), and lock it permanently.
 
-Links to the image and data aren't part of the metadata. Content is checked against its hash, so links are only hints for where to download it, and anyone can publish or mirror them at any time without being trusted. This avoids the problem of links that break or need updating after issuance. To make the metadata easy to find, the driver adds a `REMARK` to issuance spends:
+Two assets with the same TAIL but different metadata (including a different updater, or none) are different assets.
+
+With no updater, the genesis info can never change, which is the same as committing the name and symbol directly. Committing the name and symbol doesn't stop impersonation (anyone can issue another asset with the same name), so wallets still need to show the asset id or a trusted list, but it does mean that the issuer can't change them. Issuers usually expect to be able to fix an icon or rename a project, though, so an asset can opt into updates, and wallets can see whether it did, every update it made, and whether it's locked.
+
+#### The metadata updater
+
+The updater is a singleton (top layer v1.1) whose inner puzzle is [`metadata_updater.rue`](puzzles/metadata/metadata_updater.rue). It curries the current **state**, `(INFO IMAGE_URIS DATA_URIS)`, where `INFO` is `(name symbol image_hash data_hash)`, and an **owner** puzzle (any puzzle, such as the standard puzzle or a multisig), which is run with the whole solution:
+
+- **Update:** the owner outputs `(REMARK "dog_metadata_update" INFO IMAGE_URIS DATA_URIS)`, and the singleton is recreated with the new state. There can be at most one per spend. Since it's one of the owner's conditions, the owner's signature covers it.
+- **Transfer:** the singleton's child is the owner's odd `CREATE_COIN`, wrapped in the updater with the condition's puzzle hash as the new owner.
+- **Lock:** the owner melts the singleton (`CREATE_COIN` with the amount -113), and the state after that spend is final. Nobody can ever spend it again, and nothing can be added to its lineage, so wallets don't have to follow it any further. The singleton top layer needs exactly one odd output, so it can't be melted by accident.
+
+The updater doesn't look at the state, and the decimals aren't part of it. A wallet only accepts a state that is exactly `(INFO IMAGE_URIS DATA_URIS)`.
+
+The launcher id is the id of a 1 mojo coin with the launcher puzzle hash, so it's known before issuance. `Dog::issue_with_updater` launches it from the same parent coin as the eve DOG coin, so the issuance and the launch are one spend, and the updater can't be launched later by anyone else. The singleton's 1 mojo is the only XCH an updatable asset needs. The parent asserts the launcher's announcement, which commits to the singleton's puzzle hash: the launcher can be spent by anyone, so without it, someone could replace the launcher's solution in the mempool and own the updater. Anyone can launch another updater with the same state, but only the committed launcher id counts.
+
+#### Resolving metadata in a wallet
+
+`resolve_metadata` takes the committed metadata and spends of the updater's lineage, oldest first, and returns the current info and links, the mutability, and the history:
+
+- **Immutable:** there's no updater, and the genesis info is the metadata. The links are in the issuance `REMARK`.
+- **Updatable:** the latest coin is unspent, and its owner can update it. Wallets should say so, and can show the history.
+- **Locked:** the latest spend melted the singleton, so the metadata is final.
+- **Unlaunched:** there's an updater, but its launcher hasn't been spent. Wallets should show this as mutable, since the launcher can still be created by whoever controls its parent.
+
+The current state only needs one coin spend: the spend of the parent of the unspent singleton coin (which reveals the parent's state and the update, if any), or the spend that melted it. To find it, a wallet looks up the coins hinted with the launcher id (the driver hints every singleton coin after the eve with it) or follows the children of the launcher. The launcher's spend reveals the eve's state and owner in its solution, which are checked against the eve's puzzle hash, so the state is known before the singleton is ever spent. The full history is the lineage from the launcher's spend, and each revision says whether its spend published an update.
+
+The resolver checks that each spend belongs to the committed launcher id (spends of another singleton are rejected) and that consecutive spends are linked, but not that they're on chain, so they must come from a full node.
+
+#### Images and links
+
+Content is identified by its hash, so the image and data links are only hints for where to download it. Anyone can publish or mirror them, and wallets must check the content against the hash. This avoids the problem of links that break or need updating after issuance. To make the metadata easy to find, the driver adds a `REMARK` to issuance spends:
 
 ```
 (1 "dog_metadata" TAIL_HASH METADATA IMAGE_URIS DATA_URIS)
 ```
 
-An indexer can verify the metadata in it against the asset id, but the links in it are just as untrusted as any others.
+An indexer can verify the metadata in it against the asset id, but the links in it are just as untrusted as any others. For an updatable asset, the updater's state also has links, which are signed by the owner, but the content still has to match the hash.
+
+For a small image, a wallet doesn't need a link at all: a file added to IPFS with raw leaves (`ipfs add --cid-version 1`) that fits in one block (256 KiB by default) has the CID `bafkrei...`, which is the base32 encoding of `0x01551220` followed by its SHA-256 hash. So the CID can be derived from `image_hash` and fetched from any gateway. Larger files are split into blocks, and their CID isn't the hash of the file.
 
 ### Revocation
 
@@ -142,6 +177,7 @@ Things to know when writing a layer:
 | --- | --- | --- |
 | [`dog.rue`](puzzles/dog.rue) | `INNER_PUZZLE_HASH AMOUNT ASSET` | `my_coin_id lineage_proof tail_spend` |
 | [`dog_exec.rue`](puzzles/dog_exec.rue) | `INNER_PUZZLE ASSET` | `inner_solution my_amount parent_amount prev_subtotal next_inner_puzzle_hash` |
+| [`metadata_updater.rue`](puzzles/metadata/metadata_updater.rue) | `MOD_HASH STATE OWNER` | the owner's solution |
 
 - `ASSET` is the pair `(EXEC_MOD_HASH . ASSET_ID)`. The arguments that differ between coins come first, so the hash of the rest is calculated once per spend.
 - The DOG coin puzzle doesn't curry its own mod hash. The execution coin puzzle includes it as a constant (`DOG_MOD_HASH` in [`shared.rue`](puzzles/shared.rue)), and the DOG coin puzzle doesn't need it.
@@ -170,11 +206,24 @@ The revocation layer costs about the same for both (about 10.3 million), since i
 
 The execution coins are ephemeral, but they still add coin records to the blockchain.
 
+The metadata updater, measured with `cargo test --test metadata issuance_and_update_costs -- --nocapture` (an issuance of one coin with links, and spends of the updater by the standard puzzle):
+
+| Spend | Cost |
+| --- | --- |
+| Issuance without an updater | 40,027,979 |
+| Issuance with an updater | 50,307,571 |
+| First update (of the eve singleton) | 35,527,189 |
+| Update | 34,363,879 |
+| Transfer | 32,994,098 |
+| Lock | 30,352,601 |
+
+Launching the updater adds about 10.3 million to the issuance. An update costs about the same as a DOG transfer, and most of it is the singleton top layer and the updater puzzle (820 bytes) being revealed.
+
 ## Using the driver
 
 ```rust
 use chia_wallet_sdk::prelude::*;
-use dog::{Dog, DogMetadata, DogSpend, DogUris};
+use dog::{Dog, DogMetadata, DogSpend, DogUris, resolve_metadata};
 
 // Issue 1,000,000 tokens that can never be issued again.
 let metadata = DogMetadata::new("Dogecoin", "DOGE", 8);
@@ -191,6 +240,17 @@ let issuance = Dog::single_issuance_revocable(ctx, parent_coin_id, issuer_puzzle
 // The owner spends a revocable DOG like any other, and the issuer revokes it with the hidden puzzle.
 let children = Dog::spend_all(ctx, &[DogSpend::new(dog, owner_spend)])?;
 let children = Dog::spend_all(ctx, &[DogSpend::revoke(dog, issuer_spend)])?;
+
+// Issue tokens whose name, symbol and icon the owner can update, and later lock.
+let issuance = Dog::single_issuance_with_updater(ctx, parent_coin_id, &metadata, &DogUris::default(), owner_puzzle_hash, 1_000_000, conditions)?;
+let updater = issuance.updater.unwrap();
+let metadata = metadata.with_updater(updater.launcher_id); // What the asset id commits to.
+let updater = updater.update(ctx, &owner, &new_state, Conditions::new())?;
+let updater = updater.transfer(ctx, &owner, new_owner_puzzle_hash, Conditions::new())?;
+updater.lock(ctx, &new_owner, Conditions::new())?;
+
+// Resolve the current metadata from the updater's spends, oldest first.
+let resolved = resolve_metadata(allocator, &metadata, &updater_coin_spends)?;
 
 // Find the DOG coins created by an execution coin's spend, to sync a wallet.
 let children = Dog::parse_children(allocator, parent_coin, parent_puzzle, parent_solution)?;
@@ -219,6 +279,7 @@ After changing [`dog.rue`](puzzles/dog.rue), copy the new hash from `puzzles/dis
 | [`offers`](tests/offers.rs) | XCH for DOG, DOG for XCH, DOG for DOG, underpaying, paying with the wrong asset |
 | [`revocation`](tests/revocation.rs) | Issuing revocable DOGs, owner transfers, revoking without the owner, revoking several coins in a ring, revoking coins held by the settlement puzzle, offers, non-issuers can't revoke, revocation can't change supply, parsing children |
 | [`attacks`](tests/attacks.rs) | Fake TAILs, negative and oversized outputs, forged DOG and execution coins, joining the ring, sending ring messages to the wrong coin, ring messages from inner puzzles, tampered solutions, replayed signatures |
+| [`metadata`](tests/metadata.rs) | Issuing with a metadata updater in one transaction, updating, transferring and locking it, non-owners and fake updaters, replacing the launcher's solution, decimals can't change, resolving the current metadata and history, costs |
 | [`properties`](tests/properties.rs) | Random balanced rings conserve supply, and unbalanced rings are rejected |
 | [`costs`](tests/costs.rs) | Cost compared to CATs, including revocable ones |
 | [`puzzles`](tests/puzzles.rs) | The compiled puzzles match the Rue sources, with no lint diagnostics, and `DOG_MOD_HASH` is up to date |

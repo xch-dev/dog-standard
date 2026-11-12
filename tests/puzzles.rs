@@ -17,7 +17,8 @@ use dog::{
     EVERYTHING_WITH_SIGNATURE_TAIL, EVERYTHING_WITH_SIGNATURE_TAIL_HASH,
     EVERYTHING_WITH_SINGLETON_TAIL, EVERYTHING_WITH_SINGLETON_TAIL_HASH, GENESIS_BY_COIN_ID_TAIL,
     GENESIS_BY_COIN_ID_TAIL_HASH, ISSUANCE_DEADLINE_TAIL, ISSUANCE_DEADLINE_TAIL_HASH,
-    MULTISIG_TAIL, MULTISIG_TAIL_HASH, SUPPLY_COUNTER_PUZZLE, SUPPLY_COUNTER_PUZZLE_HASH,
+    METADATA_UPDATER_PUZZLE, METADATA_UPDATER_PUZZLE_HASH, MULTISIG_TAIL, MULTISIG_TAIL_HASH,
+    SUPPLY_COUNTER_PUZZLE, SUPPLY_COUNTER_PUZZLE_HASH,
 };
 use rstest::rstest;
 
@@ -57,6 +58,11 @@ use rstest::rstest;
 )]
 #[case::delegated_tail("puzzles/tails/delegated_tail.rue", &DELEGATED_TAIL, DELEGATED_TAIL_HASH)]
 #[case::multisig("puzzles/tails/multisig.rue", &MULTISIG_TAIL, MULTISIG_TAIL_HASH)]
+#[case::metadata_updater(
+    "puzzles/metadata/metadata_updater.rue",
+    &METADATA_UPDATER_PUZZLE,
+    METADATA_UPDATER_PUZZLE_HASH
+)]
 fn compiled_puzzles_are_up_to_date(
     #[case] path: &str,
     #[case] reveal: &[u8],

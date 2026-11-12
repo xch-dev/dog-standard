@@ -94,6 +94,11 @@ puzzle!(
 );
 puzzle!(DELEGATED_TAIL, DELEGATED_TAIL_HASH, "delegated_tail.rue");
 puzzle!(MULTISIG_TAIL, MULTISIG_TAIL_HASH, "multisig.rue");
+puzzle!(
+    METADATA_UPDATER_PUZZLE,
+    METADATA_UPDATER_PUZZLE_HASH,
+    "metadata_updater.rue"
+);
 
 /// The curried argument that the DOG coins and execution coins of an asset have in common.
 ///
@@ -546,4 +551,49 @@ impl Mod for MultisigTailArgs {
 pub struct MultisigTailSolution {
     /// Whether each of the public keys signs, in the same order.
     pub signers: Vec<bool>,
+}
+
+/// The first value of a `REMARK` with which the owner of a [`MetadataUpdaterArgs`] singleton
+/// updates its state: `(1 "dog_metadata_update" . STATE)`.
+pub const METADATA_UPDATE_PREFIX: &str = "dog_metadata_update";
+
+/// The inner puzzle of a metadata updater singleton, which holds the current state (by convention a
+/// [`DogMetadataState`](crate::DogMetadataState)) of an asset's display metadata.
+///
+/// The owner's puzzle is run with the whole solution. Its odd `CREATE_COIN` is wrapped in this
+/// puzzle with the new state and the condition's puzzle hash as the new owner, and a `REMARK` with
+/// [`METADATA_UPDATE_PREFIX`] replaces the state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToClvm, FromClvm)]
+#[clvm(curry)]
+pub struct MetadataUpdaterArgs<S, I> {
+    pub mod_hash: Bytes32,
+    pub state: S,
+    pub owner: I,
+}
+
+impl<S, I> MetadataUpdaterArgs<S, I> {
+    pub fn new(state: S, owner: I) -> Self {
+        Self {
+            mod_hash: METADATA_UPDATER_PUZZLE_HASH.into(),
+            state,
+            owner,
+        }
+    }
+}
+
+impl MetadataUpdaterArgs<TreeHash, TreeHash> {
+    /// The puzzle hash of a metadata updater, which is the singleton's inner puzzle hash.
+    pub fn puzzle_hash(state_hash: TreeHash, owner_puzzle_hash: Bytes32) -> TreeHash {
+        Self::new(state_hash, owner_puzzle_hash.into()).curry_tree_hash()
+    }
+}
+
+impl<S, I> Mod for MetadataUpdaterArgs<S, I> {
+    fn mod_reveal() -> Cow<'static, [u8]> {
+        Cow::Borrowed(&METADATA_UPDATER_PUZZLE)
+    }
+
+    fn mod_hash() -> TreeHash {
+        METADATA_UPDATER_PUZZLE_HASH
+    }
 }

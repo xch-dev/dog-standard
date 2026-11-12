@@ -1,0 +1,141 @@
+// The inner puzzle of a metadata updater singleton, which holds the current display metadata of a
+// DOG asset whose committed metadata names the singleton's launcher id as its updater.
+//
+// It runs the owner's puzzle, and looks for an update in its conditions: a `REMARK` of the form
+// `(1 "dog_metadata_update" . STATE)`. The new state is curried into the singleton's child, so
+// every update is recorded on chain, and the current state can be read from the spend of the
+// current coin's parent. There can be at most one update per spend, so that it's unambiguous. The
+// update is left in the output as a `REMARK`, which consensus ignores.
+//
+// The owner's odd `CREATE_COIN` (the singleton's child) is wrapped in this puzzle, with the new
+// state and the owner's puzzle hash from the condition, so the owner can transfer ownership by
+// creating the child with another puzzle hash. The owner locks the metadata by melting the
+// singleton (a `CREATE_COIN` with an amount of -113), after which it can never be updated again.
+// The singleton top layer requires exactly one odd output, so it can't be melted by accident.
+//
+// The state is opaque to this puzzle. By convention it's `(INFO IMAGE_URIS DATA_URIS)`, where
+// `INFO` is `(name symbol image_hash data_hash)`. The decimals aren't part of it, so they can't be
+// changed.
+//
+// Curried arguments:
+// - `mod_hash` is the hash of this puzzle.
+// - `state` is the current state.
+// - `owner` is the owner's puzzle. The whole solution is passed to it.
+
+// The first value of an update `REMARK`, after the opcode.
+inline const UPDATE_PREFIX: Bytes = "dog_metadata_update";
+
+type Owner = fn(...solution: Any) -> List<Condition>;
+
+fn main(mod_hash: Bytes32, state: Any, owner: Owner, ...solution: Any) -> List<Condition> {
+    let conditions = owner(...solution);
+    let new_state = next_state(state, find_update(conditions));
+    wrap_child(mod_hash, tree_hash_atom(mod_hash), tree_hash(new_state), conditions)
+}
+
+// The rest of an update `REMARK`, after the opcode: the prefix and the new state.
+type Update = (Bytes, Any);
+
+// The update in the conditions, or nil if there isn't one. Raises if there's more than one.
+fn find_update(conditions: List<Condition>) -> Update | nil {
+    if conditions is nil {
+        return nil;
+    }
+
+    inline let (condition, rest) = conditions;
+
+    let later = find_update(rest);
+
+    if (condition is Remark)
+        && (condition.rest is Update)
+        && (condition.rest.first == UPDATE_PREFIX)
+    {
+        assert later is nil;
+        return condition.rest;
+    }
+
+    later
+}
+
+fn next_state(state: Any, update: Update | nil) -> Any {
+    if update is nil {
+        return state;
+    }
+
+    update.rest
+}
+
+// Wraps the odd `CREATE_COIN`, which is the singleton's child, in this puzzle with the new state.
+fn wrap_child(
+    mod_hash: Bytes32,
+    mod_hash_hash: Bytes32,
+    state_hash: Bytes32,
+    conditions: List<Condition>,
+) -> List<Condition> {
+    if conditions is nil {
+        return nil;
+    }
+
+    inline let (condition, rest) = conditions;
+
+    let wrapped_rest = wrap_child(mod_hash, mod_hash_hash, state_hash, rest);
+
+    if (condition is CreateCoin) && (condition.amount % 2 != 0) {
+        let wrapped = CreateCoin {
+            puzzle_hash: curry_tree_hash(
+                mod_hash,
+                [mod_hash_hash, state_hash, condition.puzzle_hash],
+            ),
+            amount: condition.amount,
+            memos: condition.memos,
+        };
+        return [wrapped, ...wrapped_rest];
+    }
+
+    [condition, ...wrapped_rest]
+}
+
+test fn updates_are_found() {
+    let update = Remark { rest: [UPDATE_PREFIX, "info", "image_uris"] };
+
+    let found = find_update([Remark { rest: ["other", "remark"] }, update, Remark {}]);
+    assert tree_hash(next_state("old", found)) == tree_hash(["info", "image_uris"]);
+
+    // Without an update, the state stays the same.
+    let none = find_update([
+        Remark { rest: ["other"] },
+        Remark { rest: "atom" },
+        Remark { rest: [[UPDATE_PREFIX], "info"] },
+        Remark {},
+    ]);
+    assert tree_hash(next_state("old", none)) == tree_hash("old");
+}
+
+test fn only_odd_coins_are_wrapped() {
+    let mod_hash = sha256("updater");
+    let mod_hash_hash = tree_hash_atom(mod_hash);
+    let owner_puzzle_hash = sha256("owner");
+    let state_hash = sha256("state");
+
+    let wrapped = wrap_child(
+        mod_hash,
+        mod_hash_hash,
+        state_hash,
+        [
+            CreateCoin { puzzle_hash: owner_puzzle_hash, amount: 2 },
+            Remark {},
+            CreateCoin { puzzle_hash: owner_puzzle_hash, amount: 1 },
+        ],
+    );
+
+    let updater_puzzle_hash = curry_tree_hash(
+        mod_hash,
+        [mod_hash_hash, state_hash, owner_puzzle_hash],
+    );
+
+    assert tree_hash(wrapped) == tree_hash([
+        CreateCoin { puzzle_hash: owner_puzzle_hash, amount: 2 },
+        Remark {},
+        CreateCoin { puzzle_hash: updater_puzzle_hash, amount: 1 },
+    ]);
+}

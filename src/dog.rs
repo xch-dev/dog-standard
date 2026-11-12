@@ -21,6 +21,7 @@ use crate::{
     EverythingWithSignatureTailArgs, GenesisByCoinIdTailArgs, TailSpend, asset_id,
     puzzles::{DOG_EXEC_PUZZLE_HASH, DOG_PUZZLE_HASH},
 };
+use crate::{DogMetadataState, MetadataUpdater};
 
 /// A DOG coin, which holds an amount of tokens with an amount of 0 mojos.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +139,8 @@ pub struct DogIssuance {
     pub parent_conditions: Conditions,
     /// The eve DOG coin, which is created and spent in the same transaction.
     pub eve: Dog,
+    /// The metadata updater singleton, if it was launched with the issuance.
+    pub updater: Option<MetadataUpdater>,
     /// The DOG coins that the eve coin creates.
     pub children: Vec<Dog>,
 }
@@ -455,8 +458,82 @@ impl Dog {
         Ok(DogIssuance {
             parent_conditions: Conditions::new().create_coin(eve.coin.puzzle_hash, 0, Memos::None),
             eve,
+            updater: None,
             children,
         })
+    }
+
+    /// Like [`Dog::issue_with_hidden_puzzle_hash`], but the asset's display metadata can be updated
+    /// by a [`MetadataUpdater`] singleton owned by `owner_puzzle_hash`, which the parent coin
+    /// launches in the same transaction. The parent coin must have at least 1 mojo for it.
+    ///
+    /// The updater of `metadata` is set to the new singleton's launcher id, which is part of the
+    /// asset id. The singleton starts with the genesis info and the links in `uris`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn issue_with_updater(
+        ctx: &mut SpendContext,
+        parent_coin_id: Bytes32,
+        tail: Spend,
+        hidden_puzzle_hash: Option<Bytes32>,
+        metadata: &DogMetadata,
+        uris: &DogUris,
+        owner_puzzle_hash: Bytes32,
+        amount: u64,
+        conditions: Conditions,
+    ) -> Result<DogIssuance, DogError> {
+        let metadata = metadata
+            .clone()
+            .with_updater(MetadataUpdater::launcher_id(parent_coin_id));
+        let state = DogMetadataState::new(
+            metadata.genesis.clone(),
+            uris.image_uris.clone(),
+            uris.data_uris.clone(),
+        );
+        let (launch_conditions, updater) =
+            MetadataUpdater::launch(ctx, parent_coin_id, state, owner_puzzle_hash)?;
+
+        let issuance = Self::issue_with_hidden_puzzle_hash(
+            ctx,
+            parent_coin_id,
+            tail,
+            hidden_puzzle_hash,
+            &metadata,
+            uris,
+            amount,
+            conditions,
+        )?;
+
+        Ok(DogIssuance {
+            parent_conditions: issuance.parent_conditions.extend(launch_conditions),
+            updater: Some(updater),
+            ..issuance
+        })
+    }
+
+    /// Like [`Dog::single_issuance`], but with a [`MetadataUpdater`] owned by `owner_puzzle_hash`
+    /// (see [`Dog::issue_with_updater`]).
+    pub fn single_issuance_with_updater(
+        ctx: &mut SpendContext,
+        parent_coin_id: Bytes32,
+        metadata: &DogMetadata,
+        uris: &DogUris,
+        owner_puzzle_hash: Bytes32,
+        amount: u64,
+        conditions: Conditions,
+    ) -> Result<DogIssuance, DogError> {
+        let tail = ctx.curry(GenesisByCoinIdTailArgs::new(parent_coin_id))?;
+
+        Self::issue_with_updater(
+            ctx,
+            parent_coin_id,
+            Spend::new(tail, NodePtr::NIL),
+            None,
+            metadata,
+            uris,
+            owner_puzzle_hash,
+            amount,
+            conditions,
+        )
     }
 
     /// Issues tokens with a TAIL that only allows the parent coin to issue them, so that the

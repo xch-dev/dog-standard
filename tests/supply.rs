@@ -496,6 +496,7 @@ fn metadata_is_part_of_the_asset_id() -> Result<()> {
         DogMetadata::new("Dog", "DOGE", 8),
         base.clone().with_image_hash(Bytes32::new([1; 32])),
         base.clone().with_data_hash(Bytes32::new([1; 32])),
+        base.clone().with_updater(Bytes32::new([1; 32])),
     ];
 
     let mut asset_ids: Vec<Bytes32> = variants
@@ -505,6 +506,10 @@ fn metadata_is_part_of_the_asset_id() -> Result<()> {
     asset_ids.sort();
     asset_ids.dedup();
     assert_eq!(asset_ids.len(), variants.len());
+
+    // The metadata is `(decimals (name symbol image_hash data_hash) updater)`.
+    let layout = ctx.alloc(&clvm_list!(8, clvm_list!("Dogecoin", "DOGE", (), ()), ()))?;
+    assert_eq!(ctx.tree_hash(layout), base.tree_hash());
 
     // The asset id is the tree hash of `(TAIL . METADATA)`.
     let metadata_ptr = ctx.alloc(&base)?;

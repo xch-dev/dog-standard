@@ -201,14 +201,14 @@ Spending a DOG takes two coin spends instead of one, and creates two coins per o
 
 | Spend | CAT | DOG | Ratio |
 | --- | --- | --- | --- |
-| 1 coin to 1 coin | 32,969,564 | 34,545,504 | 1.05x |
-| 1 coin to 2 coins | 35,760,177 | 37,324,945 | 1.04x |
-| 3 coins to 1 coin | 93,231,549 | 97,957,742 | 1.05x |
-| 5 coins to 5 coins | 164,727,971 | 172,583,788 | 1.05x |
-| Revocable, owner spend (1 coin to 1 coin) | 43,274,669 | 44,813,341 | 1.04x |
-| Revocable, revocation spend (1 coin to 1 coin) | 43,251,953 | 44,790,625 | 1.04x |
+| 1 coin to 1 coin | 32,969,564 | 34,773,504 | 1.05x |
+| 1 coin to 2 coins | 35,760,177 | 37,552,945 | 1.05x |
+| 3 coins to 1 coin | 93,231,549 | 98,641,742 | 1.06x |
+| 5 coins to 5 coins | 164,727,971 | 173,723,788 | 1.05x |
+| Revocable, owner spend (1 coin to 1 coin) | 43,274,669 | 45,041,341 | 1.04x |
+| Revocable, revocation spend (1 coin to 1 coin) | 43,251,953 | 45,018,625 | 1.04x |
 
-Most of the cost is the 12,000 per byte of the puzzle reveals and solutions, which is what the mempool charges for. The DOG coin puzzle (650 bytes) and execution coin puzzle (947 bytes) are revealed once per coin, like the CAT puzzle. The rest of the difference is the `CREATE_COIN` for each execution coin (1,800,000) and the extra coin spend.
+Most of the cost is the 12,000 per byte of the puzzle reveals and solutions, which is what the mempool charges for. The DOG coin puzzle (669 bytes) and execution coin puzzle (947 bytes) are revealed once per coin, like the CAT puzzle. The rest of the difference is the `CREATE_COIN` for each execution coin (1,800,000) and the extra coin spend.
 
 The revocation layer costs about the same for both (about 10.3 million), since it's the same puzzle.
 

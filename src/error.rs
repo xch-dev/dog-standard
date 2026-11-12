@@ -39,4 +39,10 @@ pub enum DogError {
 
     #[error("the curried mod hashes don't match the DOG puzzles")]
     InvalidModHash,
+
+    #[error("the coin spend isn't a valid spend of the asset's metadata updater")]
+    InvalidUpdaterSpend,
+
+    #[error("the updater's state isn't exactly a DogMetadataState")]
+    InvalidMetadataState,
 }

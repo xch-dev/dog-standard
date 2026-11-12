@@ -11,7 +11,9 @@
 //!   so they never need to exist. The inner puzzle runs in the execution coin, so it sees a normal
 //!   coin with a real amount and a puzzle hash that doesn't depend on the amount. This keeps DOGs
 //!   compatible with offers and other inner puzzles.
-//! - The asset id commits to [`DogMetadata`], such as the name, symbol, and decimals.
+//! - The asset id commits to [`DogMetadata`]: the decimals, the genesis name, symbol and content
+//!   hashes, and optionally a [`MetadataUpdater`] singleton that can update or lock the display
+//!   metadata.
 //!
 //! See the Rue sources in `puzzles/` for the details of how the puzzles work.
 
@@ -19,8 +21,10 @@ mod dog;
 mod error;
 mod metadata;
 mod puzzles;
+mod updater;
 
 pub use dog::*;
 pub use error::*;
 pub use metadata::*;
 pub use puzzles::*;
+pub use updater::*;

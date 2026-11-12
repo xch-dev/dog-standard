@@ -1,0 +1,19 @@
+// The message that TAILs use to authorize a supply change, with a signature or a message from a
+// singleton.
+//
+// It commits to both the supply change and the new amount of the execution coin. The supply change
+// alone isn't enough: a DOG coin with a lineage proof can also be spent without one, and then the
+// same supply change gives a different new amount (`delta` instead of `amount + delta`). Committing
+// to the new amount means an authorization can only be used for the result it was made for.
+//
+// The supply change is at the end, so that a puzzle that tracks supply (such as
+// `supply_counter.rue`) can read it with `substr(message, 32)`.
+export fn authorization_message(supply_change: Int, new_amount: Int) -> Bytes {
+    sha256(new_amount as Bytes) + supply_change as Bytes
+}
+
+test fn authorization_message_layout() {
+    let message = authorization_message(-42, 1000);
+    assert substr(message, 0, 32) == sha256(1000 as Bytes);
+    assert substr(message, 32) as Int == -42;
+}

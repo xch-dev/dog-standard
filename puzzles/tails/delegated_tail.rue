@@ -1,28 +1,44 @@
 // A TAIL that runs any TAIL that's signed by a public key.
 //
-// The solution is a delegated TAIL and its solution. The delegated TAIL is run with the supply
-// change, and its tree hash must be signed by the public key with `AGG_SIG_UNSAFE`. This lets the
-// issuer decide how tokens can be issued after the asset is created, without changing the asset id.
+// The solution is a delegated TAIL and its solution. The delegated TAIL is run with the same
+// arguments, and the asset id followed by its tree hash must be signed by the public key with
+// `AGG_SIG_UNSAFE`. This lets the issuer decide how tokens can be issued after the asset is created,
+// without changing the asset id.
 // For example, signing `genesis_by_coin_id` for a coin allows a one-time issuance from that coin.
 //
 // The signature isn't tied to a coin, so once a delegated TAIL has been signed, anyone can use it
 // for any coin, forever, and it can't be revoked. Only sign TAILs that are safe for anyone to use,
 // such as TAILs that need another signature or a specific coin.
 //
-// The signature also isn't tied to the asset, since the TAIL can't see the asset id. If the same
-// public key is used for several assets, a delegated TAIL signed for one of them can be used for
-// all of them, so use a different key for each asset.
+// The signature is tied to the asset, since the asset id is signed along with the delegated TAIL, so
+// the same key can be used for several assets.
 
-type Tail = fn(supply_change: Int, ...solution: Any) -> List<Condition>;
+type Tail = fn(
+    supply_change: Int,
+    new_amount: Int,
+    inner_puzzle_hash: Bytes32,
+    asset_id: Bytes32,
+    ...solution: Any,
+) -> List<Condition>;
 
 fn main(
     public_key: PublicKey,
     supply_change: Int,
+    new_amount: Int,
+    inner_puzzle_hash: Bytes32,
+    asset_id: Bytes32,
     delegated_tail: Tail,
     ...delegated_solution: Any,
 ) -> List<Condition> {
     [
-        AggSigUnsafe { public_key, message: tree_hash(delegated_tail) },
-        ...delegated_tail(supply_change, ...delegated_solution),
+        // The signature is tied to the asset, so the same key can be used for several assets.
+        AggSigUnsafe { public_key, message: asset_id + tree_hash(delegated_tail) },
+        ...delegated_tail(
+            supply_change,
+            new_amount,
+            inner_puzzle_hash,
+            asset_id,
+            ...delegated_solution,
+        ),
     ]
 }

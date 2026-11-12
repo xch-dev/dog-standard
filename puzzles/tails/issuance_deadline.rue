@@ -10,10 +10,24 @@
 // The deadline is compared to the timestamp of the previous transaction block, so a transaction
 // can be included a short time after the deadline.
 
-type Tail = fn(supply_change: Int, ...solution: Any) -> List<Condition>;
+type Tail = fn(
+    supply_change: Int,
+    new_amount: Int,
+    inner_puzzle_hash: Bytes32,
+    asset_id: Bytes32,
+    ...solution: Any,
+) -> List<Condition>;
 
-fn main(deadline: Int, tail: Tail, supply_change: Int, ...solution: Any) -> List<Condition> {
-    let conditions = tail(supply_change, ...solution);
+fn main(
+    deadline: Int,
+    tail: Tail,
+    supply_change: Int,
+    new_amount: Int,
+    inner_puzzle_hash: Bytes32,
+    asset_id: Bytes32,
+    ...solution: Any,
+) -> List<Condition> {
+    let conditions = tail(supply_change, new_amount, inner_puzzle_hash, asset_id, ...solution);
 
     if supply_change > 0 {
         return [AssertBeforeSecondsAbsolute { seconds: deadline }, ...conditions];

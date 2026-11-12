@@ -15,8 +15,8 @@
 // with another inner puzzle that later becomes a supply counter, but neither can allow more than the
 // cap to be issued.
 //
-// The same caveat about lineage proofs applies as for `everything_with_singleton`. The counter
-// counts the supply change it authorized either way, so it doesn't affect the cap.
+// The message is `authorization_message(supply_change, new_amount)`, which ends with the supply
+// change, so the counter can add it up.
 //
 // Curried arguments:
 // - `singleton_mod_hash` is the hash of the singleton top layer v1.1.
@@ -24,6 +24,8 @@
 //   SINGLETON_LAUNCHER_HASH))`.
 // - `counter_mod_hash` is the hash of `supply_counter.rue`.
 // - `cap` is the most that can ever be issued.
+
+import authorization::authorization_message;
 
 // The singleton commits to its puzzle hash, and the DOG coin to its coin id.
 const AUTHORIZATION_MODE: Int = 0b010_111;
@@ -34,6 +36,9 @@ fn main(
     counter_mod_hash: Bytes32,
     cap: Int,
     supply_change: Int,
+    new_amount: Int,
+    _inner_puzzle_hash: Bytes32,
+    _asset_id: Bytes32,
     issued: Int,
     owner_puzzle_hash: Bytes32,
 ) -> List<Condition> {
@@ -49,7 +54,7 @@ fn main(
 
     [ReceiveMessage {
         mode: AUTHORIZATION_MODE,
-        message: supply_change as Bytes,
+        message: authorization_message(supply_change, new_amount),
         sender: [curry_tree_hash(singleton_mod_hash, [singleton_struct_hash, counter_puzzle_hash])],
     }]
 }

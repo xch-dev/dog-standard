@@ -24,7 +24,7 @@ export inline const RING_MODE: Int = 0b000_010;
 // The DOG coin puzzle needs the hash of the execution coin puzzle, and the other way around. The
 // DOG coin puzzle doesn't need its own hash, so the execution coin puzzle can include it as a
 // constant, rather than both puzzles currying it. A test checks that it's up to date.
-export inline const DOG_MOD_HASH: Bytes32 = 0xfc5d9d734e4aee9d1ddfd18b2e01a3027220189a0ac98fa3f6d9d622792d8f0b;
+export inline const DOG_MOD_HASH: Bytes32 = 0x359fe09b29e4bda802b6d0ce0c7b8e2037c1e98ea867d9788b92d4194f8f1233;
 
 // The curried argument that every DOG coin and execution coin of an asset has in common.
 // It's a pair rather than a list, which makes it a little smaller.

@@ -11,6 +11,7 @@ use chia_wallet_sdk::{
         bls::PublicKey,
         protocol::Bytes32,
         puzzle_types::{LineageProof, singleton::SingletonStruct},
+        sha2::Sha256,
     },
     clvm_traits::{FromClvm, ToClvm},
     clvm_utils::{ToTreeHash, TreeHash},
@@ -264,13 +265,10 @@ impl EverythingWithSignatureTailArgs {
         Self { public_key }
     }
 
-    /// The message that must be signed with `AGG_SIG_ME` to change the supply by `supply_change`.
-    ///
-    /// # Panics
-    ///
-    /// Never, since an integer can always be allocated.
-    pub fn message(supply_change: i128) -> Vec<u8> {
-        supply_change_message(supply_change)
+    /// The message that must be signed with `AGG_SIG_ME` to change the supply by `supply_change`,
+    /// leaving the execution coin with `new_amount`.
+    pub fn message(supply_change: i128, new_amount: u64) -> Vec<u8> {
+        authorization_message(supply_change, new_amount)
     }
 }
 
@@ -284,14 +282,24 @@ impl Mod for EverythingWithSignatureTailArgs {
     }
 }
 
-/// The canonical CLVM encoding of a supply change, which is the message that TAILs sign or receive.
+/// The message that TAILs sign or receive to authorize a supply change, which is
+/// `sha256(new_amount) + supply_change` (both in their canonical CLVM encoding).
 ///
-/// # Panics
-///
-/// Never, since an integer can always be allocated.
-pub fn supply_change_message(supply_change: i128) -> Vec<u8> {
+/// It commits to the new amount of the execution coin as well as the supply change, since a DOG
+/// coin with a lineage proof can also be spent without one, which gives the same supply change a
+/// different new amount. See `puzzles/tails/authorization.rue`.
+pub fn authorization_message(supply_change: i128, new_amount: u64) -> Vec<u8> {
+    let mut message = Sha256::new();
+    message.update(int_bytes(new_amount.into()));
+    let mut message = message.finalize().to_vec();
+    message.extend(int_bytes(supply_change));
+    message
+}
+
+/// The canonical CLVM encoding of an integer.
+fn int_bytes(value: i128) -> Vec<u8> {
     let mut allocator = chia_wallet_sdk::clvmr::Allocator::new();
-    let ptr = supply_change
+    let ptr = value
         .to_clvm(&mut allocator)
         .expect("an integer can always be allocated");
     allocator.atom(ptr).as_ref().to_vec()
@@ -309,7 +317,7 @@ pub const SINGLETON_AUTHORIZATION_MODE: u8 = 0b010_111;
 /// A TAIL that allows any supply change authorized by a singleton.
 ///
 /// The singleton sends a message with the mode [`SINGLETON_AUTHORIZATION_MODE`] to the DOG coin's id,
-/// containing [`supply_change_message`].
+/// containing [`authorization_message`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ToClvm, FromClvm)]
 #[clvm(curry)]
 pub struct EverythingWithSingletonTailArgs {
@@ -513,7 +521,7 @@ pub struct DelegatedTailSolution<P, S> {
 }
 
 /// A TAIL that allows any supply change signed by at least `threshold` of the public keys, with
-/// `AGG_SIG_ME` and [`supply_change_message`].
+/// `AGG_SIG_ME` and [`authorization_message`].
 #[derive(Debug, Clone, PartialEq, Eq, ToClvm, FromClvm)]
 #[clvm(curry)]
 pub struct MultisigTailArgs {

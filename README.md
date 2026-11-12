@@ -48,27 +48,35 @@ A lineage proof shows that the DOG coin's parent is an execution coin of the sam
 
 ### TAIL
 
-A TAIL is called with the supply change (positive to issue, negative to melt) followed by its solution, and returns conditions:
+A TAIL is called with the supply change (positive to issue, negative to melt), the new amount of the execution coin, the DOG coin's inner puzzle hash, and the asset id, followed by its solution, and returns conditions:
 
 ```rs
-type Tail = fn(supply_change: Int, ...solution: Any) -> List<Condition>;
+type Tail = fn(
+    supply_change: Int,
+    new_amount: Int,
+    inner_puzzle_hash: Bytes32,
+    asset_id: Bytes32,
+    ...solution: Any,
+) -> List<Condition>;
 ```
+
+- An authorization should commit to the **new amount** as well as the supply change. A coin with a lineage proof can also be spent without one, which gives the same supply change a different new amount (`delta` instead of `amount + delta`). The standard TAILs sign or receive [`sha256(new_amount) + supply_change`](puzzles/tails/authorization.rue), so an authorization can only be used for the result it was made for.
+- The **inner puzzle hash** lets a TAIL require that tokens are issued into a particular puzzle, such as a [layer](#extending-dog) that restricts who can hold them, without a signature.
+- The **asset id** lets an authorization be tied to one asset, such as a signature that would otherwise be valid for every asset that uses the same key.
 
 The TAIL runs in the DOG coin's spend, so `AGG_SIG_ME` and `ASSERT_MY_*` conditions apply to the DOG coin. There are two standard TAILs:
 
 - [`genesis_by_coin_id`](puzzles/tails/genesis_by_coin_id.rue) asserts that the DOG coin's parent is the genesis coin, so tokens can only be issued once, and never melted. It doesn't require a signature, so the eve coin's inner puzzle must fix its own outputs, as the driver's quoted conditions do.
-- [`everything_with_signature`](puzzles/tails/everything_with_signature.rue) requires an `AGG_SIG_ME` signature of the supply change by a public key, so the key's owner can issue or melt at any time.
+- [`everything_with_signature`](puzzles/tails/everything_with_signature.rue) requires an `AGG_SIG_ME` signature of the supply change and new amount by a public key, so the key's owner can issue or melt at any time.
 
 There are also TAILs for other policies, each with its rules and caveats in its header comment:
 
-- [`everything_with_singleton`](puzzles/tails/everything_with_singleton.rue) requires a message from a singleton to the DOG coin containing the supply change, so whoever controls the singleton can issue or melt, and each authorization is for one coin and one amount.
+- [`everything_with_singleton`](puzzles/tails/everything_with_singleton.rue) requires a message from a singleton to the DOG coin containing the supply change and new amount, so whoever controls the singleton can issue or melt, and each authorization is for one coin and one amount.
 - [`capped_supply`](puzzles/tails/capped_supply.rue) is like `everything_with_singleton`, but the singleton's inner puzzle must be the [supply counter](puzzles/tails/supply_counter.rue), which adds up what it authorizes and can never authorize more than a cap in total. Melting doesn't make room under the cap.
 - [`burnable`](puzzles/tails/burnable.rue) wraps another TAIL, and lets holders melt their own tokens without it. Wrapping `genesis_by_coin_id` gives a fixed supply that can only go down.
 - [`issuance_deadline`](puzzles/tails/issuance_deadline.rue) wraps another TAIL, and only allows issuing before a timestamp. Melting is allowed at any time, if the other TAIL allows it.
-- [`delegated_tail`](puzzles/tails/delegated_tail.rue) runs any TAIL whose tree hash is signed by a public key. A signed TAIL can be used by anyone, forever, so it should only be one that's safe for anyone to use.
-- [`multisig`](puzzles/tails/multisig.rue) requires `AGG_SIG_ME` signatures of the supply change by at least `m` of `n` public keys.
-
-A TAIL only sees the supply change, not the coin's amount before or after it. A coin with a lineage proof can also be spent without one, in which case the same supply change gives a different amount, so an authorization of a supply change for a coin doesn't fix the amount of its execution coin. The owner's signature does, for inner puzzles that sign the execution coin's id.
+- [`delegated_tail`](puzzles/tails/delegated_tail.rue) runs any TAIL whose tree hash is signed by a public key, along with the asset id. A signed TAIL can be used by anyone, forever, so it should only be one that's safe for anyone to use.
+- [`multisig`](puzzles/tails/multisig.rue) requires `AGG_SIG_ME` signatures of the supply change and new amount by at least `m` of `n` public keys.
 
 The TAIL can't change a coin's amount without its owner's consent. The owner's inner puzzle usually signs with `AGG_SIG_ME`, which commits to the execution coin's id, and the id includes the amount after the supply change. Inner puzzles that don't sign anything (such as the settlement payments puzzle) can be issued into or melted by anyone the TAIL allows, while they're in the mempool.
 
@@ -131,7 +139,7 @@ There are two examples in [`puzzles/layers`](puzzles/layers), tested in [`tests/
 
 Things to know when writing a layer:
 
-- **Every coin of the asset must be in the layer.** The ring only checks the total, so a coin of the same asset outside the layer (even one worth 0 tokens) could join a spend and take the tokens out. The TAIL, or the eve coin's inner puzzle, must make sure that tokens are only issued into the layer. TAILs can't see the inner puzzle hash or its conditions, unlike CAT TAILs, so a TAIL that issues without a signature has to prove the inner puzzle hash with `ASSERT_MY_PUZZLE_HASH` itself.
+- **Every coin of the asset must be in the layer.** The ring only checks the total, so a coin of the same asset outside the layer (even one worth 0 tokens) could join a spend and take the tokens out. The TAIL, or the eve coin's inner puzzle, must make sure that tokens are only issued into the layer. The TAIL is given the inner puzzle hash, so it can check this directly. Unlike CAT TAILs, it can't see the inner puzzle's conditions.
 - **Relative time conditions don't work in inner puzzles.** The execution coin is ephemeral, and consensus rejects relative time conditions (such as `ASSERT_SECONDS_RELATIVE`) on ephemeral coins. Absolute ones work, so vesting schedules and the standard clawback do too.
 - **Messages to a puzzle hash from anyone that start with `0xd0` are rejected.** A layer that sends or receives a hash with mode `0b000010` should add a prefix byte, or it will fail 1 time in 256. Every other mode is unrestricted.
 - `ASSERT_MY_COIN_ID`, `ASSERT_MY_PARENT_ID` and `AGG_SIG_ME` apply to the execution coin, whose parent is the DOG coin, so a layer that checks its own lineage needs to go back two coins.

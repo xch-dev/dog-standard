@@ -221,18 +221,36 @@ fn single_issuance_is_final() -> Result<()> {
     Ok(())
 }
 
-/// A TAIL that allows anything and outputs `(REMARK supply_change)`, so tests can see what it's
+/// A TAIL that allows anything and outputs
+/// `(REMARK supply_change new_amount inner_puzzle_hash asset_id)`, so tests can see what it's
 /// called with.
 fn echo_tail(ctx: &mut SpendContext) -> Result<NodePtr> {
     Ok(ctx.alloc(&clvm_list!(
         4,
-        clvm_list!(4, (1, 1), clvm_list!(4, 2, ())),
+        clvm_list!(
+            4,
+            (1, 1),
+            clvm_list!(
+                4,
+                2,
+                clvm_list!(4, 5, clvm_list!(4, 11, clvm_list!(4, 23, ())))
+            )
+        ),
         ()
     ))?)
 }
 
-/// Runs the spend of the DOG coin, and returns the supply change that the echo TAIL saw.
-fn echoed_supply_change(coin_spends: &[CoinSpend], dog: &Dog) -> Result<i128> {
+/// What the echo TAIL was called with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Echo {
+    supply_change: i128,
+    new_amount: u64,
+    inner_puzzle_hash: Bytes32,
+    asset_id: Bytes32,
+}
+
+/// Runs the spend of the DOG coin, and returns what the echo TAIL was called with.
+fn echoed(coin_spends: &[CoinSpend], dog: &Dog) -> Result<Echo> {
     let mut allocator = Allocator::new();
     let coin_spend = coin_spends
         .iter()
@@ -246,8 +264,238 @@ fn echoed_supply_change(coin_spends: &[CoinSpend], dog: &Dog) -> Result<i128> {
         .into_iter()
         .find_map(Condition::into_remark)
         .expect("the TAIL outputs a remark");
-    let (supply_change, ()) = <(i128, ())>::from_clvm(&allocator, remark.rest)?;
-    Ok(supply_change)
+    let (supply_change, (new_amount, (inner_puzzle_hash, (asset_id, ())))) =
+        <(i128, (u64, (Bytes32, (Bytes32, ()))))>::from_clvm(&allocator, remark.rest)?;
+    Ok(Echo {
+        supply_change,
+        new_amount,
+        inner_puzzle_hash,
+        asset_id,
+    })
+}
+
+/// The supply change that the echo TAIL saw.
+fn echoed_supply_change(coin_spends: &[CoinSpend], dog: &Dog) -> Result<i128> {
+    Ok(echoed(coin_spends, dog)?.supply_change)
+}
+
+#[test]
+fn tail_sees_new_amount_inner_puzzle_and_asset() -> Result<()> {
+    let mut sim = Simulator::new();
+    let ctx = &mut SpendContext::new();
+
+    let issuer = sim.bls(0);
+    let alice = sim.bls(0);
+    let tail = echo_tail(ctx)?;
+    let tail_spend = Spend::new(tail, NodePtr::NIL);
+
+    let conditions = send(ctx, alice.puzzle_hash, 1000)?;
+    let issuance = Dog::issue(
+        ctx,
+        issuer.coin.coin_id(),
+        tail_spend,
+        &metadata(),
+        &DogUris::default(),
+        1000,
+        conditions,
+    )?;
+    StandardLayer::new(issuer.pk).spend(ctx, issuer.coin, issuance.parent_conditions)?;
+    let coin_spends = ctx.take();
+    assert_eq!(
+        echoed(&coin_spends, &issuance.eve)?,
+        Echo {
+            supply_change: 1000,
+            new_amount: 1000,
+            inner_puzzle_hash: issuance.eve.p2_puzzle_hash,
+            asset_id: issuance.eve.asset_id,
+        }
+    );
+    for coin_spend in coin_spends {
+        ctx.insert(coin_spend);
+    }
+    submit(&mut sim, ctx, &[issuer.sk])?;
+
+    // Melting 250 of Alice's coin.
+    let dog = issuance.children[0];
+    let conditions = send(ctx, alice.puzzle_hash, 750)?;
+    let inner_spend = p2(ctx, &alice, conditions)?;
+    Dog::spend_all(
+        ctx,
+        &[DogSpend::with_tail(
+            dog,
+            inner_spend,
+            tail_spend,
+            metadata_hash(),
+            -250,
+        )],
+    )?;
+    assert_eq!(
+        echoed(&ctx.take(), &dog)?,
+        Echo {
+            supply_change: -250,
+            new_amount: 750,
+            inner_puzzle_hash: alice.puzzle_hash,
+            asset_id: dog.asset_id,
+        }
+    );
+
+    Ok(())
+}
+
+/// A TAIL that only allows tokens to be issued into the given inner puzzle hash, such as a layer
+/// that restricts who can hold them. It doesn't need a signature to know where the tokens go.
+fn inner_puzzle_tail(ctx: &mut SpendContext, inner_puzzle_hash: Bytes32) -> Result<NodePtr> {
+    // (a (i (= 11 (q . INNER_PUZZLE_HASH)) (q) (q 8)) 1)
+    Ok(ctx.alloc(&clvm_list!(
+        2,
+        clvm_list!(
+            3,
+            clvm_list!(9, 11, (1, inner_puzzle_hash)),
+            (1, ()),
+            clvm_list!(1, 8)
+        ),
+        1
+    ))?)
+}
+
+#[test]
+fn tail_can_require_an_inner_puzzle() -> Result<()> {
+    let mut sim = Simulator::new();
+    let ctx = &mut SpendContext::new();
+
+    let issuer = sim.bls(0);
+    let alice = sim.bls(0);
+
+    // The issuance puts the tokens straight into Alice's coin, rather than through a quoted
+    // inner puzzle, so that the TAIL sees her puzzle hash.
+    let tail = inner_puzzle_tail(ctx, alice.puzzle_hash)?;
+    let tail_hash = ctx.tree_hash(tail);
+    let asset = asset_id(tail_hash, metadata().tree_hash());
+
+    for (owner, valid) in [(alice.puzzle_hash, true), (issuer.puzzle_hash, false)] {
+        let parent = sim.bls(0);
+        let eve = Dog::new(parent.coin.coin_id(), asset, owner, 1000, None);
+        StandardLayer::new(parent.pk).spend(
+            ctx,
+            parent.coin,
+            Conditions::new().create_coin(
+                eve.coin.puzzle_hash,
+                0,
+                chia_wallet_sdk::chia::puzzle_types::Memos::None,
+            ),
+        )?;
+        let signer = if valid { &alice } else { &issuer };
+        let conditions = send(ctx, owner, 1000)?;
+        let inner_spend = p2(ctx, signer, conditions)?;
+        Dog::spend_all(
+            ctx,
+            &[DogSpend::with_tail(
+                eve,
+                inner_spend,
+                Spend::new(tail, NodePtr::NIL),
+                metadata_hash(),
+                0,
+            )],
+        )?;
+
+        if valid {
+            submit(&mut sim, ctx, &[parent.sk, signer.sk.clone()])?;
+        } else {
+            assert_eq!(
+                submit_err(&mut sim, ctx, &[parent.sk, signer.sk.clone()]),
+                PUZZLE_FAILED
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// A signed authorization for one supply change can't be replayed to give the coin a different
+/// amount, by spending it without its lineage proof. Coins whose inner puzzle doesn't sign the
+/// execution coin's id (such as those held by the settlement payments puzzle) rely on this.
+#[test]
+fn authorization_cant_be_replayed_without_lineage() -> Result<()> {
+    use chia_wallet_sdk::{
+        chia::{
+            protocol::SpendBundle,
+            puzzle_types::offer::{NotarizedPayment, Payment, SettlementPaymentsSolution},
+        },
+        driver::{Layer, SettlementLayer},
+        puzzles::SETTLEMENT_PAYMENT_HASH,
+        test::sign_transaction,
+    };
+
+    let mut sim = Simulator::new();
+    let ctx = &mut SpendContext::new();
+
+    let issuer = sim.bls(0);
+    let alice = sim.bls(0);
+    let mallory = sim.bls(0);
+    let settlement: Bytes32 = SETTLEMENT_PAYMENT_HASH.into();
+
+    // A coin of 1000 held by the settlement payments puzzle, which anyone can spend.
+    let dog = issue_multi(&mut sim, ctx, &issuer, settlement, 1000)?;
+    let tail = signature_tail(ctx, &issuer)?;
+
+    let settle = |ctx: &mut SpendContext, puzzle_hash: Bytes32, amount: u64| -> Result<Spend> {
+        let payment = NotarizedPayment {
+            nonce: Bytes32::default(),
+            payments: vec![Payment::new(
+                puzzle_hash,
+                amount,
+                chia_wallet_sdk::chia::puzzle_types::Memos::None,
+            )],
+        };
+        Ok(SettlementLayer.construct_spend(ctx, SettlementPaymentsSolution::new(vec![payment]))?)
+    };
+
+    // The issuer signs off on issuing 100 more into it, for 1100 in total.
+    let inner_spend = settle(ctx, alice.puzzle_hash, 1100)?;
+    Dog::spend_all(
+        ctx,
+        &[DogSpend::with_tail(
+            dog,
+            inner_spend,
+            tail,
+            metadata_hash(),
+            100,
+        )],
+    )?;
+    let legitimate = ctx.take();
+    let signature = sign_transaction(&legitimate, &[issuer.sk.clone()])?;
+
+    // Mallory drops the lineage proof, so the same supply change of 100 gives the coin an amount
+    // of 100, and takes it. The 1000 already in the coin would be destroyed without the TAIL
+    // seeing it. The issuer's signature commits to the new amount, so it doesn't match.
+    let unproven = Dog {
+        lineage_proof: None,
+        ..dog
+    };
+    let inner_spend = settle(ctx, mallory.puzzle_hash, 100)?;
+    Dog::spend_all(
+        ctx,
+        &[DogSpend::with_tail(
+            unproven,
+            inner_spend,
+            tail,
+            metadata_hash(),
+            -900,
+        )],
+    )?;
+    let result = sim.new_transaction(SpendBundle::new(ctx.take(), signature.clone()));
+    assert!(
+        matches!(
+            result,
+            Err(SimulatorError::Validation(ErrorCode::BadAggregateSignature))
+        ),
+        "{result:?}"
+    );
+
+    // The spend the issuer signed is still valid.
+    sim.new_transaction(SpendBundle::new(legitimate, signature))?;
+
+    Ok(())
 }
 
 #[test]

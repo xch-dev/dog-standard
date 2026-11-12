@@ -15,11 +15,24 @@
 // pays out less than its amount in an offer, the rest could be burned by anyone. That loses the
 // tokens, but nobody gains anything from it.
 
-type Tail = fn(supply_change: Int, ...solution: Any) -> List<Condition>;
+type Tail = fn(
+    supply_change: Int,
+    new_amount: Int,
+    inner_puzzle_hash: Bytes32,
+    asset_id: Bytes32,
+    ...solution: Any,
+) -> List<Condition>;
 
-fn main(issuance_tail: Tail, supply_change: Int, ...solution: Any) -> List<Condition> {
+fn main(
+    issuance_tail: Tail,
+    supply_change: Int,
+    new_amount: Int,
+    inner_puzzle_hash: Bytes32,
+    asset_id: Bytes32,
+    ...solution: Any,
+) -> List<Condition> {
     if supply_change < 0 {
         return nil;
     }
-    issuance_tail(supply_change, ...solution)
+    issuance_tail(supply_change, new_amount, inner_puzzle_hash, asset_id, ...solution)
 }

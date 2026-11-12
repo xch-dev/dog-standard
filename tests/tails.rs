@@ -29,7 +29,7 @@ use dog::{
     DelegatedTailSolution, Dog, DogSpend, EverythingWithSignatureTailArgs,
     EverythingWithSingletonTailArgs, EverythingWithSingletonTailSolution, GenesisByCoinIdTailArgs,
     IssuanceDeadlineTailArgs, MultisigTailArgs, MultisigTailSolution, SINGLETON_AUTHORIZATION_MODE,
-    SUPPLY_COUNTER_PUZZLE, SUPPLY_COUNTER_PUZZLE_HASH, SupplyCounterArgs, supply_change_message,
+    SUPPLY_COUNTER_PUZZLE, SUPPLY_COUNTER_PUZZLE_HASH, SupplyCounterArgs, authorization_message,
 };
 
 fn metadata_hash() -> Bytes32 {
@@ -177,9 +177,18 @@ fn authorize(
     supply_change: i128,
 ) -> Result<Conditions> {
     let receiver = ctx.alloc(&dog.coin.coin_id())?;
+
+    // Without a lineage proof, none of the coin's amount is proven, so the new amount is the
+    // whole supply change.
+    let new_amount = if dog.lineage_proof.is_some() {
+        i128::from(dog.amount) + supply_change
+    } else {
+        supply_change
+    };
+
     Ok(conditions.send_message(
         SINGLETON_AUTHORIZATION_MODE,
-        supply_change_message(supply_change).into(),
+        authorization_message(supply_change, u64::try_from(new_amount)?).into(),
         vec![receiver],
     ))
 }
@@ -987,6 +996,43 @@ mod delegated_tail {
             submit_err(&mut sim, ctx, &[other.sk, issuer.sk]),
             ErrorCode::AssertMyParentIdFailed
         );
+
+        Ok(())
+    }
+    /// The issuer signs the asset id along with the delegated TAIL, so a delegation for one asset
+    /// can't be used for another asset with the same key.
+    #[test]
+    fn delegation_is_tied_to_the_asset() -> Result<()> {
+        use chia_wallet_sdk::{
+            clvm_traits::{FromClvm, clvm_list},
+            types::{Condition, run_puzzle},
+        };
+
+        let ctx = &mut SpendContext::new();
+        let issuer = chia_wallet_sdk::test::BlsPair::new(0);
+        let tail = ctx.curry(DelegatedTailArgs::new(issuer.pk))?;
+        let delegated_tail = ctx.alloc(&chia_wallet_sdk::clvm_traits::clvm_quote!(()))?;
+
+        for asset_id in [Bytes32::new([1; 32]), Bytes32::new([2; 32])] {
+            let args = ctx.alloc(&clvm_list!(
+                100,
+                100,
+                Bytes32::default(),
+                asset_id,
+                delegated_tail
+            ))?;
+            let output = run_puzzle(ctx, tail, args)?;
+            let conditions = Vec::<Condition>::from_clvm(ctx, output)?;
+            let agg_sig = conditions
+                .into_iter()
+                .find_map(Condition::into_agg_sig_unsafe)
+                .expect("the issuer must sign");
+
+            let mut message = asset_id.to_vec();
+            message.extend_from_slice(&ctx.tree_hash(delegated_tail).to_bytes());
+            assert_eq!(agg_sig.public_key, issuer.pk);
+            assert_eq!(agg_sig.message.as_ref(), message.as_slice());
+        }
 
         Ok(())
     }

@@ -19,6 +19,8 @@
 // - `issued` is the total of the positive supply changes authorized so far.
 // - `owner` is the owner's puzzle. The whole solution is passed to it.
 
+import authorization::authorization_message;
+
 // The singleton commits to its puzzle hash, and the DOG coin to its coin id.
 inline const AUTHORIZATION_MODE: Int = 0b010_111;
 
@@ -71,7 +73,9 @@ fn authorized(conditions: List<Condition>) -> Int {
 
 // The amount that a message counts toward the cap.
 fn credit(mode: Int, message: Bytes) -> Int {
-    let supply_change = message as Int;
+    // The supply change is after the 32 byte hash of the new amount. A shorter message in this mode
+    // makes `substr` raise, which is fine, since no TAIL would accept it.
+    let supply_change = substr(message, 32) as Int;
 
     if (mode == AUTHORIZATION_MODE) && (supply_change > 0) {
         supply_change
@@ -116,20 +120,34 @@ test fn positive_authorizations_are_counted() {
     let coin_id = sha256("coin");
 
     assert authorized([
-        SendMessage { mode: AUTHORIZATION_MODE, message: 100 as Bytes, receiver: [coin_id] },
+        SendMessage {
+            mode: AUTHORIZATION_MODE,
+            message: authorization_message(100, 0),
+            receiver: [coin_id],
+        },
         Remark {},
-        SendMessage { mode: AUTHORIZATION_MODE, message: 50 as Bytes, receiver: [coin_id] },
+        SendMessage {
+            mode: AUTHORIZATION_MODE,
+            message: authorization_message(50, 0),
+            receiver: [coin_id],
+        },
     ]) == 150;
 }
 
 test fn melts_and_other_messages_are_not_counted() {
     let coin_id = sha256("coin");
+    let issue = authorization_message(100, 0);
 
+    // Melts, other modes, and received messages don't count. Messages in this mode that are too
+    // short to hold a supply change make the counter raise, since no TAIL would accept them.
     assert authorized([
-        SendMessage { mode: AUTHORIZATION_MODE, message: (-100) as Bytes, receiver: [coin_id] },
-        SendMessage { mode: 0b111_111, message: 100 as Bytes, receiver: [coin_id] },
-        ReceiveMessage { mode: AUTHORIZATION_MODE, message: 100 as Bytes, sender: [coin_id] },
-        SendMessage { mode: AUTHORIZATION_MODE, message: nil, receiver: [coin_id] },
+        SendMessage {
+            mode: AUTHORIZATION_MODE,
+            message: authorization_message(-100, 0),
+            receiver: [coin_id],
+        },
+        SendMessage { mode: 0b111_111, message: issue, receiver: [coin_id] },
+        ReceiveMessage { mode: AUTHORIZATION_MODE, message: issue, sender: [coin_id] },
     ]) == 0;
 }
 

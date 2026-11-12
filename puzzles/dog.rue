@@ -22,12 +22,25 @@ struct LineageProof {
 
 // The TAIL decides whether the supply of the asset can change.
 //
-// It's called with the change in supply, which is positive when issuing and negative when melting,
-// along with its solution. It returns conditions that must be met for the change to be allowed.
+// It's called with:
+// - `supply_change`: positive when issuing and negative when melting. It's the amount of the
+//   execution coin minus the amount that's proven with a lineage proof (or zero, if there isn't one).
+// - `new_amount`: the amount of the execution coin. An authorization should commit to it as well as
+//   the supply change, since the same supply change can give different amounts depending on
+//   whether a lineage proof is used.
+// - `inner_puzzle_hash`: the inner puzzle of the DOG coin, so a TAIL can require that tokens are
+//   issued into a particular puzzle, such as a layer that restricts who can hold them.
+// - `asset_id`: so that an authorization can be tied to one asset.
+// - The TAIL's own solution.
 //
-// The supply change is the amount of the execution coin minus the amount that's proven with a
-// lineage proof (or zero, if there isn't one).
-type Tail = fn(supply_change: Int, ...solution: Any) -> List<Condition>;
+// It returns conditions that must be met for the change to be allowed.
+type Tail = fn(
+    supply_change: Int,
+    new_amount: Int,
+    inner_puzzle_hash: Bytes32,
+    asset_id: Bytes32,
+    ...solution: Any,
+) -> List<Condition>;
 
 // A reveal of the TAIL, to change the supply or to spend a coin without a lineage proof.
 struct TailSpend {
@@ -76,7 +89,15 @@ fn main(
 
         let new_amount = amount + tail_spend.delta;
 
-        (new_amount, tail_spend.tail(new_amount - proven_amount, ...tail_spend.solution))
+        let tail_conditions = tail_spend.tail(
+            new_amount - proven_amount,
+            new_amount,
+            inner_puzzle_hash,
+            asset.asset_id,
+            ...tail_spend.solution,
+        );
+
+        (new_amount, tail_conditions)
     };
 
     let child_puzzle_hash = exec_puzzle_hash(

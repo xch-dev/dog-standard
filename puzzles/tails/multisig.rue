@@ -1,18 +1,27 @@
 // A TAIL that allows any supply change signed by at least `threshold` of the public keys.
 //
 // The solution is a list of flags, one for each public key, that says which keys sign. Each of
-// them must sign the supply change with `AGG_SIG_ME`, so the signatures are tied to the DOG coin,
-// and can't be reused for another coin or another amount. Missing flags count as not signing.
+// them must sign `authorization_message(supply_change, new_amount)` with `AGG_SIG_ME`, so the
+// signatures are tied to the DOG coin, and can't be reused for another coin or another amount. Missing flags count as not signing.
 //
 // The public keys should be distinct, since a key that's listed twice can sign twice.
+
+import authorization::authorization_message;
 
 fn main(
     threshold: Int,
     public_keys: List<PublicKey>,
     supply_change: Int,
+    new_amount: Int,
+    _inner_puzzle_hash: Bytes32,
+    _asset_id: Bytes32,
     signers: List<Bool>,
 ) -> List<Condition> {
-    let signatures = signatures(public_keys, signers, supply_change as Bytes);
+    let signatures = signatures(
+        public_keys,
+        signers,
+        authorization_message(supply_change, new_amount),
+    );
     assert signatures.count >= threshold;
     signatures.conditions
 }

@@ -228,13 +228,14 @@ pub fn spend_ring(ctx: &mut SpendContext, items: &[RawRingItem]) -> Result<()> {
                 dog: item.dog,
                 inner_spend: item.inner_spend,
                 tail_spend: item.tail_spend,
+                hidden: false,
             },
             item.exec_amount,
             prev.dog.exec_coin(prev.exec_amount).coin_id(),
             prev_subtotals[index],
             chia_wallet_sdk::chia::puzzle_types::CoinProof {
                 parent_coin_info: next.dog.coin.coin_id(),
-                inner_puzzle_hash: next.dog.p2_puzzle_hash,
+                inner_puzzle_hash: next.dog.inner_puzzle_hash().into(),
                 amount: next.exec_amount,
             },
         )?;

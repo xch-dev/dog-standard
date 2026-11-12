@@ -34,6 +34,9 @@ pub enum DogError {
     #[error("an inner puzzle created a coin that isn't a valid CREATE_COIN condition")]
     UnsupportedCreateCoin,
 
+    #[error("only revocable DOGs can be spent with the hidden puzzle")]
+    NotRevocable,
+
     #[error("the curried mod hashes don't match the DOG puzzles")]
     InvalidModHash,
 }

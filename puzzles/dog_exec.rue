@@ -1,0 +1,186 @@
+// The DOG execution coin puzzle.
+//
+// An execution coin is created by a DOG coin (`dog.rue`) and spent in the same block. Its amount in
+// mojos is the token amount, so the inner puzzle sees the same coin amount and puzzle hash that it
+// would for any other fungible asset. This makes it possible to use the same inner puzzles, such as
+// the settlement payments puzzle for offers.
+//
+// It wraps every coin created by the inner puzzle in the DOG coin puzzle, with an amount of 0 mojos
+// and the token amount curried in. To make sure that the supply doesn't change, the execution coins
+// of a spend bundle form a ring of messages, in which each coin passes along the running total of
+// its amount minus the amounts it creates. The ring can only close if the total is zero.
+
+import shared::{
+    DOG_TO_EXEC_MODE,
+    Hashes,
+    MAX_AMOUNT,
+    RING_MODE,
+    RING_PREFIX,
+    dog_puzzle_hash,
+    exec_puzzle_hash,
+    hashes,
+};
+
+// Information about the next execution coin in the ring.
+struct CoinProof {
+    parent_coin_info: Bytes32,
+    inner_puzzle_hash: Bytes32,
+    amount: Int,
+}
+
+fn main(
+    dog_mod_hash: Bytes32,
+    exec_mod_hash: Bytes32,
+    asset_id: Bytes32,
+    inner_puzzle: fn(...solution: Any) -> List<Condition>,
+    inner_solution: Any,
+    my_amount: Int,
+    parent_amount: Int,
+    prev_coin_id: Bytes32,
+    prev_subtotal: Int,
+    next_coin_proof: CoinProof,
+) -> List<Condition> {
+    let hashes = hashes(dog_mod_hash, exec_mod_hash, asset_id);
+    let inner_puzzle_hash = tree_hash(inner_puzzle);
+
+    let morph = morph_conditions(hashes, inner_puzzle(...inner_solution));
+
+    // The running total of the amounts of the coins in the ring, minus the amounts they create.
+    let subtotal = prev_subtotal + my_amount - morph.sum;
+
+    let next_coin_id = coinid(
+        next_coin_proof.parent_coin_info,
+        exec_puzzle_hash(hashes, next_coin_proof.inner_puzzle_hash),
+        next_coin_proof.amount,
+    );
+
+    [
+        // The parent must be a DOG coin of the same asset and inner puzzle. This also proves that
+        // `my_amount` is the amount of this coin, since the parent commits to it.
+        ReceiveMessage {
+            mode: DOG_TO_EXEC_MODE,
+            message: my_amount as Bytes,
+            sender: [dog_puzzle_hash(hashes, inner_puzzle_hash, parent_amount)],
+        },
+        // Link this coin to the next and previous execution coins in the ring.
+        SendMessage {
+            mode: RING_MODE,
+            message: RING_PREFIX + subtotal as Bytes,
+            receiver: [next_coin_id],
+        },
+        ReceiveMessage {
+            mode: RING_MODE,
+            message: RING_PREFIX + prev_subtotal as Bytes,
+            sender: [prev_coin_id],
+        },
+        ...morph.conditions,
+    ]
+}
+
+struct Morph {
+    // The conditions after wrapping the created coins.
+    conditions: List<Condition>,
+
+    // The total token amount of the created coins.
+    sum: Int,
+}
+
+fn morph_conditions(hashes: Hashes, conditions: List<Condition>) -> Morph {
+    if conditions is nil {
+        return Morph { conditions: nil, sum: 0 };
+    }
+
+    inline let (condition, rest) = conditions;
+
+    let morphed = morph_conditions(hashes, rest);
+
+    if condition is CreateCoin {
+        // Adding zero puts the amount in canonical form, so that it matches the amount that's
+        // calculated when the created DOG coin is spent.
+        let amount = condition.amount + 0;
+
+        // The amount is curried rather than checked by consensus, so it has to be checked here.
+        // A negative amount would let the other coins be worth more than the input.
+        assert (amount >= 0) & (amount <= MAX_AMOUNT);
+
+        let wrapped = CreateCoin {
+            puzzle_hash: dog_puzzle_hash(hashes, condition.puzzle_hash, amount),
+            amount: 0,
+            memos: condition.memos,
+        };
+
+        return Morph { conditions: [wrapped, ...morphed.conditions], sum: morphed.sum + amount };
+    }
+
+    let is_ring_message = if condition is SendMessage {
+        is_ring_message(condition.mode, condition.message)
+    } else if condition is ReceiveMessage {
+        is_ring_message(condition.mode, condition.message)
+    } else {
+        false
+    };
+
+    // Otherwise, the inner puzzle could take the place of another execution coin in the ring.
+    assert !is_ring_message;
+
+    Morph { conditions: [condition, ...morphed.conditions], sum: morphed.sum }
+}
+
+// Whether a message could be mistaken for a message in the ring of execution coins.
+fn is_ring_message(mode: Int, message: Bytes) -> Bool {
+    (mode == RING_MODE) && (message.length > 0) && (substr(message, 0, 1) == RING_PREFIX)
+}
+
+test fn ring_messages_are_recognized() {
+    assert is_ring_message(RING_MODE, RING_PREFIX);
+    assert is_ring_message(RING_MODE, RING_PREFIX + 42 as Bytes);
+    assert is_ring_message(RING_MODE, RING_PREFIX + (-42) as Bytes);
+
+    // Other modes, other prefixes, and empty messages aren't ring messages.
+    assert !is_ring_message(DOG_TO_EXEC_MODE, RING_PREFIX);
+    assert !is_ring_message(RING_MODE, nil);
+    assert !is_ring_message(RING_MODE, 0x01d0);
+    assert !is_ring_message(RING_MODE, "hello");
+}
+
+test fn created_coins_are_wrapped() {
+    let hashes = hashes(sha256("dog"), sha256("exec"), sha256("asset"));
+    let puzzle_hash = sha256("p2");
+
+    let morph = morph_conditions(
+        hashes,
+        [
+            CreateCoin { puzzle_hash, amount: 1000 },
+            Remark {},
+            CreateCoin { puzzle_hash, amount: 0, memos: Memos { value: [puzzle_hash] } },
+        ],
+    );
+
+    assert morph.sum == 1000;
+    assert tree_hash(morph.conditions) == tree_hash([
+        CreateCoin { puzzle_hash: dog_puzzle_hash(hashes, puzzle_hash, 1000), amount: 0 },
+        Remark {},
+        CreateCoin {
+            puzzle_hash: dog_puzzle_hash(hashes, puzzle_hash, 0),
+            amount: 0,
+            memos: Memos { value: [puzzle_hash] },
+        },
+    ]);
+}
+
+test fn amounts_are_made_canonical() {
+    let hashes = hashes(sha256("dog"), sha256("exec"), sha256("asset"));
+    let puzzle_hash = sha256("p2");
+
+    // 1000 with a redundant leading zero.
+    #[allow(bytes_int_confusion)]
+    let amount = 0x0003e8 as Int;
+
+    let morph = morph_conditions(hashes, [CreateCoin { puzzle_hash, amount }]);
+
+    assert morph.sum == 1000;
+    assert tree_hash(morph.conditions) == tree_hash([CreateCoin {
+        puzzle_hash: dog_puzzle_hash(hashes, puzzle_hash, 1000),
+        amount: 0,
+    }]);
+}

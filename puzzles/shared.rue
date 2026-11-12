@@ -1,0 +1,77 @@
+// Definitions shared by the DOG coin puzzle (`dog.rue`) and the DOG execution coin puzzle
+// (`dog_exec.rue`).
+//
+// A DOG token balance is held in a persistent DOG coin, which is always worth 0 mojos. Its token
+// amount is curried into its puzzle instead. Spending it creates an ephemeral execution coin worth
+// the token amount in mojos, which runs the inner puzzle and is spent in the same block. The mojos
+// of the execution coin are added and removed in the same spend bundle, so they never need to
+// exist.
+
+// The first byte of the messages that link the execution coins of a spend into a ring.
+// Inner puzzles can't send or receive coin to coin messages that start with this byte.
+export inline const RING_PREFIX: Bytes = 0xd0;
+
+// The largest amount that a coin can have, which is the largest unsigned 64-bit integer.
+export inline const MAX_AMOUNT: Int = 18446744073709551615;
+
+// A message mode in which the sender commits to its puzzle hash, and the receiver to its coin id.
+// The DOG coin sends it to its execution coin, which proves that its parent is a DOG coin.
+export inline const DOG_TO_EXEC_MODE: Int = 0b010_111;
+
+// A message mode in which both the sender and receiver commit to their coin id.
+// It's used for the ring of execution coins.
+export inline const RING_MODE: Int = 0b111_111;
+
+// The tree hashes of the curried arguments that the DOG and execution puzzles have in common.
+// They're calculated once per spend, and used to calculate puzzle hashes of other coins.
+export struct Hashes {
+    dog_mod_hash: Bytes32,
+    exec_mod_hash: Bytes32,
+    dog_mod_hash_hash: Bytes32,
+    exec_mod_hash_hash: Bytes32,
+    asset_id_hash: Bytes32,
+}
+
+export inline fn hashes(
+    dog_mod_hash: Bytes32,
+    exec_mod_hash: Bytes32,
+    asset_id: Bytes32,
+) -> Hashes {
+    Hashes {
+        dog_mod_hash,
+        exec_mod_hash,
+        dog_mod_hash_hash: tree_hash_atom(dog_mod_hash),
+        exec_mod_hash_hash: tree_hash_atom(exec_mod_hash),
+        asset_id_hash: tree_hash_atom(asset_id),
+    }
+}
+
+// The puzzle hash of a DOG coin with the given inner puzzle hash and token amount.
+// The curried arguments are `(DOG_MOD_HASH EXEC_MOD_HASH ASSET_ID INNER_PUZZLE_HASH AMOUNT)`.
+export fn dog_puzzle_hash(hashes: Hashes, inner_puzzle_hash: Bytes32, amount: Int) -> Bytes32 {
+    curry_tree_hash(
+        hashes.dog_mod_hash,
+        [
+            hashes.dog_mod_hash_hash,
+            hashes.exec_mod_hash_hash,
+            hashes.asset_id_hash,
+            tree_hash_atom(inner_puzzle_hash),
+            tree_hash_atom(amount as Bytes),
+        ],
+    )
+}
+
+// The puzzle hash of an execution coin with the given inner puzzle hash.
+// The curried arguments are `(DOG_MOD_HASH EXEC_MOD_HASH ASSET_ID INNER_PUZZLE)`.
+// Unlike the DOG coin, the puzzle hash doesn't depend on the amount.
+export fn exec_puzzle_hash(hashes: Hashes, inner_puzzle_hash: Bytes32) -> Bytes32 {
+    curry_tree_hash(
+        hashes.exec_mod_hash,
+        [
+            hashes.dog_mod_hash_hash,
+            hashes.exec_mod_hash_hash,
+            hashes.asset_id_hash,
+            inner_puzzle_hash,
+        ],
+    )
+}

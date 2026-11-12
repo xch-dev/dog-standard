@@ -1,0 +1,11 @@
+// A TAIL that can only issue tokens once, from the coin with the given id.
+//
+// The DOG coins created by the genesis coin can be issued with any amount, but no other coin can
+// issue or melt tokens, so the supply is fixed after that.
+//
+// Nothing is signed, so anyone can spend a DOG coin created by the genesis coin, with any delta.
+// The eve coin's inner puzzle must fix its own outputs (as the quoted conditions used by the
+// driver do), and it should be spent in the same transaction that creates it.
+fn main(genesis_coin_id: Bytes32, _supply_change: Int) -> List<Condition> {
+    [AssertMyParentId { parent_id: genesis_coin_id }]
+}

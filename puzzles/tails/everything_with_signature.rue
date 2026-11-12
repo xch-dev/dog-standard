@@ -1,0 +1,7 @@
+// A TAIL that allows any supply change signed by the given public key.
+//
+// The signature is over the supply change, and with `AGG_SIG_ME` it's also tied to the DOG coin
+// being spent, so it can't be reused for another coin.
+fn main(public_key: PublicKey, supply_change: Int) -> List<Condition> {
+    [AggSigMe { public_key, message: supply_change as Bytes }]
+}

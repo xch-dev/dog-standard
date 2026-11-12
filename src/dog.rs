@@ -390,9 +390,7 @@ impl Dog {
 
         let args = DogExecArgs::<NodePtr>::from_clvm(allocator, curried.args)?;
 
-        if args.dog_mod_hash != DOG_PUZZLE_HASH.into()
-            || args.exec_mod_hash != DOG_EXEC_PUZZLE_HASH.into()
-        {
+        if args.asset.exec_mod_hash != DOG_EXEC_PUZZLE_HASH.into() {
             return Err(DogError::InvalidModHash);
         }
 
@@ -418,7 +416,7 @@ impl Dog {
                  }| {
                     Self::new(
                         parent_coin.coin_id(),
-                        args.asset_id,
+                        args.asset.asset_id,
                         puzzle_hash,
                         amount,
                         Some(lineage_proof),
@@ -445,9 +443,7 @@ impl Dog {
 
         let args = DogArgs::from_clvm(allocator, curried.args)?;
 
-        if args.dog_mod_hash != DOG_PUZZLE_HASH.into()
-            || args.exec_mod_hash != DOG_EXEC_PUZZLE_HASH.into()
-        {
+        if args.asset.exec_mod_hash != DOG_EXEC_PUZZLE_HASH.into() {
             return Err(DogError::InvalidModHash);
         }
 

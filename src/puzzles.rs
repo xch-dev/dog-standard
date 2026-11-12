@@ -71,25 +71,45 @@ puzzle!(
     "everything_with_signature.rue"
 );
 
+/// The curried argument that the DOG coins and execution coins of an asset have in common.
+///
+/// It's a pair rather than a list, which makes it a little smaller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToClvm, FromClvm)]
+#[clvm(list)]
+pub struct DogAsset {
+    pub exec_mod_hash: Bytes32,
+    #[clvm(rest)]
+    pub asset_id: Bytes32,
+}
+
+impl DogAsset {
+    pub fn new(asset_id: Bytes32) -> Self {
+        Self {
+            exec_mod_hash: DOG_EXEC_PUZZLE_HASH.into(),
+            asset_id,
+        }
+    }
+}
+
 /// The curried arguments of a DOG coin, which holds tokens with an amount of 0 mojos.
+///
+/// The arguments that differ between coins come first, so that the hash of the rest can be
+/// calculated once per spend. The DOG coin puzzle doesn't curry its own mod hash, since the
+/// execution coin puzzle includes it as a constant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ToClvm, FromClvm)]
 #[clvm(curry)]
 pub struct DogArgs {
-    pub dog_mod_hash: Bytes32,
-    pub exec_mod_hash: Bytes32,
-    pub asset_id: Bytes32,
     pub inner_puzzle_hash: Bytes32,
     pub amount: u64,
+    pub asset: DogAsset,
 }
 
 impl DogArgs {
     pub fn new(asset_id: Bytes32, inner_puzzle_hash: Bytes32, amount: u64) -> Self {
         Self {
-            dog_mod_hash: DOG_PUZZLE_HASH.into(),
-            exec_mod_hash: DOG_EXEC_PUZZLE_HASH.into(),
-            asset_id,
             inner_puzzle_hash,
             amount,
+            asset: DogAsset::new(asset_id),
         }
     }
 
@@ -140,19 +160,15 @@ pub struct TailSpend<T, S> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ToClvm, FromClvm)]
 #[clvm(curry)]
 pub struct DogExecArgs<I> {
-    pub dog_mod_hash: Bytes32,
-    pub exec_mod_hash: Bytes32,
-    pub asset_id: Bytes32,
     pub inner_puzzle: I,
+    pub asset: DogAsset,
 }
 
 impl<I> DogExecArgs<I> {
     pub fn new(asset_id: Bytes32, inner_puzzle: I) -> Self {
         Self {
-            dog_mod_hash: DOG_PUZZLE_HASH.into(),
-            exec_mod_hash: DOG_EXEC_PUZZLE_HASH.into(),
-            asset_id,
             inner_puzzle,
+            asset: DogAsset::new(asset_id),
         }
     }
 }

@@ -11,7 +11,7 @@
 //
 // Running the TAIL can also issue or melt tokens, by changing the amount of the execution coin.
 
-import shared::{DOG_TO_EXEC_MODE, exec_puzzle_hash, hashes};
+import shared::{Asset, DOG_TO_EXEC_MODE, asset_args_hash, exec_puzzle_hash};
 
 // Proof that the parent of this DOG coin is an execution coin of the same asset.
 struct LineageProof {
@@ -46,28 +46,20 @@ struct TailSpend {
 }
 
 fn main(
-    dog_mod_hash: Bytes32,
-    exec_mod_hash: Bytes32,
-    asset_id: Bytes32,
     inner_puzzle_hash: Bytes32,
     amount: Int,
+    asset: Asset,
     my_coin_id: Bytes32,
     lineage_proof: LineageProof | nil,
     tail_spend: TailSpend | nil,
 ) -> List<Condition> {
-    let hashes = hashes(dog_mod_hash, exec_mod_hash, asset_id);
+    let asset_args_hash = asset_args_hash(asset);
 
     // Without a lineage proof, none of the tokens are proven to exist yet.
-    let (proven_amount, lineage_conditions) = if lineage_proof is nil {
-        (0, nil)
+    let proven_amount = if lineage_proof is nil {
+        0
     } else {
-        let parent_coin_id = coinid(
-            lineage_proof.parent_parent_coin_info,
-            exec_puzzle_hash(hashes, lineage_proof.parent_inner_puzzle_hash),
-            lineage_proof.parent_amount,
-        );
-
-        (amount, [AssertMyParentId { parent_id: parent_coin_id }])
+        amount
     };
 
     let (new_amount, tail_conditions) = if tail_spend is nil {
@@ -77,26 +69,49 @@ fn main(
         (amount, nil)
     } else {
         // Make sure that the revealed TAIL and metadata belong to this asset.
-        assert tree_hash_pair(tree_hash(tail_spend.tail), tail_spend.metadata_hash) == asset_id;
+        assert tree_hash_pair(
+            tree_hash(tail_spend.tail),
+            tail_spend.metadata_hash,
+        ) == asset.asset_id;
 
         let new_amount = amount + tail_spend.delta;
 
         (new_amount, tail_spend.tail(new_amount - proven_amount, ...tail_spend.solution))
     };
 
-    let exec_puzzle_hash = exec_puzzle_hash(hashes, inner_puzzle_hash);
+    let child_puzzle_hash = exec_puzzle_hash(
+        asset_args_hash,
+        asset.exec_mod_hash,
+        inner_puzzle_hash,
+    );
 
     // If the amount is negative or too large, `coinid` raises.
-    let exec_coin_id = coinid(my_coin_id, exec_puzzle_hash, new_amount);
+    let exec_coin_id = coinid(my_coin_id, child_puzzle_hash, new_amount);
 
-    [
+    let conditions = [
         AssertMyCoinId { coin_id: my_coin_id },
-        CreateCoin { puzzle_hash: exec_puzzle_hash, amount: new_amount },
+        CreateCoin { puzzle_hash: child_puzzle_hash, amount: new_amount },
         SendMessage {
             mode: DOG_TO_EXEC_MODE,
             message: new_amount as Bytes,
             receiver: [exec_coin_id],
         },
-        ...merge_list(lineage_conditions, tail_conditions),
-    ]
+        ...tail_conditions,
+    ];
+
+    if lineage_proof is nil {
+        return conditions;
+    }
+
+    let parent_coin_id = coinid(
+        lineage_proof.parent_parent_coin_info,
+        exec_puzzle_hash(
+            asset_args_hash,
+            asset.exec_mod_hash,
+            lineage_proof.parent_inner_puzzle_hash,
+        ),
+        lineage_proof.parent_amount,
+    );
+
+    [AssertMyParentId { parent_id: parent_coin_id }, ...conditions]
 }

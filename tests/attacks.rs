@@ -741,7 +741,7 @@ fn dog_args_match_puzzle() -> Result<()> {
     assert_eq!(Dog::parse_puzzle(ctx, puzzle)?, Some(args));
     assert_eq!(
         ctx.tree_hash(puzzle),
-        DogArgs::puzzle_hash(args.asset_id, args.inner_puzzle_hash, args.amount)
+        DogArgs::puzzle_hash(args.asset.asset_id, args.inner_puzzle_hash, args.amount)
     );
     Ok(())
 }

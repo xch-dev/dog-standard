@@ -11,14 +11,13 @@
 // its amount minus the amounts it creates. The ring can only close if the total is zero.
 
 import shared::{
+    Asset,
     DOG_TO_EXEC_MODE,
-    Hashes,
-    MAX_AMOUNT,
     RING_MODE,
     RING_PREFIX,
+    asset_args_hash,
     dog_puzzle_hash,
     exec_puzzle_hash,
-    hashes,
 };
 
 // Information about the next execution coin in the ring.
@@ -29,10 +28,8 @@ struct CoinProof {
 }
 
 fn main(
-    dog_mod_hash: Bytes32,
-    exec_mod_hash: Bytes32,
-    asset_id: Bytes32,
     inner_puzzle: fn(...solution: Any) -> List<Condition>,
+    asset: Asset,
     inner_solution: Any,
     my_amount: Int,
     parent_amount: Int,
@@ -40,17 +37,16 @@ fn main(
     prev_subtotal: Int,
     next_coin_proof: CoinProof,
 ) -> List<Condition> {
-    let hashes = hashes(dog_mod_hash, exec_mod_hash, asset_id);
-    let inner_puzzle_hash = tree_hash(inner_puzzle);
+    let asset_args_hash = asset_args_hash(asset);
 
-    let morph = morph_conditions(hashes, inner_puzzle(...inner_solution));
+    let morph = morph_conditions(asset_args_hash, inner_puzzle(...inner_solution));
 
     // The running total of the amounts of the coins in the ring, minus the amounts they create.
     let subtotal = prev_subtotal + my_amount - morph.sum;
 
     let next_coin_id = coinid(
         next_coin_proof.parent_coin_info,
-        exec_puzzle_hash(hashes, next_coin_proof.inner_puzzle_hash),
+        exec_puzzle_hash(asset_args_hash, asset.exec_mod_hash, next_coin_proof.inner_puzzle_hash),
         next_coin_proof.amount,
     );
 
@@ -60,7 +56,7 @@ fn main(
         ReceiveMessage {
             mode: DOG_TO_EXEC_MODE,
             message: my_amount as Bytes,
-            sender: [dog_puzzle_hash(hashes, inner_puzzle_hash, parent_amount)],
+            sender: [dog_puzzle_hash(asset_args_hash, tree_hash(inner_puzzle), parent_amount)],
         },
         // Link this coin to the next and previous execution coins in the ring.
         SendMessage {
@@ -82,17 +78,17 @@ struct Morph {
     conditions: List<Condition>,
 
     // The total token amount of the created coins.
-    sum: Int,
+    ...sum: Int,
 }
 
-fn morph_conditions(hashes: Hashes, conditions: List<Condition>) -> Morph {
+fn morph_conditions(asset_args_hash: Bytes32, conditions: List<Condition>) -> Morph {
     if conditions is nil {
         return Morph { conditions: nil, sum: 0 };
     }
 
     inline let (condition, rest) = conditions;
 
-    let morphed = morph_conditions(hashes, rest);
+    let morphed = morph_conditions(asset_args_hash, rest);
 
     if condition is CreateCoin {
         // Adding zero puts the amount in canonical form, so that it matches the amount that's
@@ -100,11 +96,12 @@ fn morph_conditions(hashes: Hashes, conditions: List<Condition>) -> Morph {
         let amount = condition.amount + 0;
 
         // The amount is curried rather than checked by consensus, so it has to be checked here.
-        // A negative amount would let the other coins be worth more than the input.
-        assert (amount >= 0) & (amount <= MAX_AMOUNT);
+        // A negative amount would let the other coins be worth more than the input. `coinid`
+        // raises if the amount is negative or larger than `u64::MAX`.
+        assert coinid(asset_args_hash, asset_args_hash, amount) != nil;
 
         let wrapped = CreateCoin {
-            puzzle_hash: dog_puzzle_hash(hashes, condition.puzzle_hash, amount),
+            puzzle_hash: dog_puzzle_hash(asset_args_hash, condition.puzzle_hash, amount),
             amount: 0,
             memos: condition.memos,
         };
@@ -112,43 +109,53 @@ fn morph_conditions(hashes: Hashes, conditions: List<Condition>) -> Morph {
         return Morph { conditions: [wrapped, ...morphed.conditions], sum: morphed.sum + amount };
     }
 
-    let is_ring_message = if condition is SendMessage {
-        is_ring_message(condition.mode, condition.message)
-    } else if condition is ReceiveMessage {
-        is_ring_message(condition.mode, condition.message)
-    } else {
-        false
-    };
-
     // Otherwise, the inner puzzle could take the place of another execution coin in the ring.
-    assert !is_ring_message;
+    assert !(
+        (condition is SendMessage | ReceiveMessage)
+            && is_ring_message(condition as MessageCondition)
+    );
 
     Morph { conditions: [condition, ...morphed.conditions], sum: morphed.sum }
 }
 
+// A `SEND_MESSAGE` or `RECEIVE_MESSAGE` condition, which have the same layout.
+struct MessageCondition {
+    _opcode: Int,
+    mode: Int,
+    message: Bytes,
+    ..._rest: Any,
+}
+
 // Whether a message could be mistaken for a message in the ring of execution coins.
-fn is_ring_message(mode: Int, message: Bytes) -> Bool {
-    (mode == RING_MODE) && (message.length > 0) && (substr(message, 0, 1) == RING_PREFIX)
+//
+// A zero byte is appended before taking the first byte, so that an empty message doesn't raise.
+inline fn is_ring_message(condition: MessageCondition) -> Bool {
+    (condition.mode == RING_MODE) & (substr(condition.message + 0x00, 0, 1) == RING_PREFIX)
 }
 
 test fn ring_messages_are_recognized() {
-    assert is_ring_message(RING_MODE, RING_PREFIX);
-    assert is_ring_message(RING_MODE, RING_PREFIX + 42 as Bytes);
-    assert is_ring_message(RING_MODE, RING_PREFIX + (-42) as Bytes);
+    assert is_ring_message(message(RING_MODE, RING_PREFIX));
+    assert is_ring_message(message(RING_MODE, RING_PREFIX + 42 as Bytes));
+    assert is_ring_message(message(RING_MODE, RING_PREFIX + (-42) as Bytes));
 
     // Other modes, other prefixes, and empty messages aren't ring messages.
-    assert !is_ring_message(DOG_TO_EXEC_MODE, RING_PREFIX);
-    assert !is_ring_message(RING_MODE, nil);
-    assert !is_ring_message(RING_MODE, 0x01d0);
-    assert !is_ring_message(RING_MODE, "hello");
+    assert !is_ring_message(message(DOG_TO_EXEC_MODE, RING_PREFIX));
+    assert !is_ring_message(message(RING_MODE, nil));
+    assert !is_ring_message(message(RING_MODE, 0x00));
+    assert !is_ring_message(message(RING_MODE, 0x01d0));
+    assert !is_ring_message(message(RING_MODE, "hello"));
+}
+
+fn message(mode: Int, message: Bytes) -> MessageCondition {
+    MessageCondition { _opcode: 66, mode, message, _rest: nil }
 }
 
 test fn created_coins_are_wrapped() {
-    let hashes = hashes(sha256("dog"), sha256("exec"), sha256("asset"));
+    let asset_args_hash = sha256("asset");
     let puzzle_hash = sha256("p2");
 
     let morph = morph_conditions(
-        hashes,
+        asset_args_hash,
         [
             CreateCoin { puzzle_hash, amount: 1000 },
             Remark {},
@@ -158,10 +165,10 @@ test fn created_coins_are_wrapped() {
 
     assert morph.sum == 1000;
     assert tree_hash(morph.conditions) == tree_hash([
-        CreateCoin { puzzle_hash: dog_puzzle_hash(hashes, puzzle_hash, 1000), amount: 0 },
+        CreateCoin { puzzle_hash: dog_puzzle_hash(asset_args_hash, puzzle_hash, 1000), amount: 0 },
         Remark {},
         CreateCoin {
-            puzzle_hash: dog_puzzle_hash(hashes, puzzle_hash, 0),
+            puzzle_hash: dog_puzzle_hash(asset_args_hash, puzzle_hash, 0),
             amount: 0,
             memos: Memos { value: [puzzle_hash] },
         },
@@ -169,18 +176,18 @@ test fn created_coins_are_wrapped() {
 }
 
 test fn amounts_are_made_canonical() {
-    let hashes = hashes(sha256("dog"), sha256("exec"), sha256("asset"));
+    let asset_args_hash = sha256("asset");
     let puzzle_hash = sha256("p2");
 
     // 1000 with a redundant leading zero.
     #[allow(bytes_int_confusion)]
     let amount = 0x0003e8 as Int;
 
-    let morph = morph_conditions(hashes, [CreateCoin { puzzle_hash, amount }]);
+    let morph = morph_conditions(asset_args_hash, [CreateCoin { puzzle_hash, amount }]);
 
     assert morph.sum == 1000;
     assert tree_hash(morph.conditions) == tree_hash([CreateCoin {
-        puzzle_hash: dog_puzzle_hash(hashes, puzzle_hash, 1000),
+        puzzle_hash: dog_puzzle_hash(asset_args_hash, puzzle_hash, 1000),
         amount: 0,
     }]);
 }

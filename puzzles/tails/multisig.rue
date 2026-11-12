@@ -1,0 +1,62 @@
+// A TAIL that allows any supply change signed by at least `threshold` of the public keys.
+//
+// The solution is a list of flags, one for each public key, that says which keys sign. Each of
+// them must sign the supply change with `AGG_SIG_ME`, so the signatures are tied to the DOG coin,
+// and can't be reused for another coin or another amount. Missing flags count as not signing.
+//
+// The public keys should be distinct, since a key that's listed twice can sign twice.
+
+fn main(
+    threshold: Int,
+    public_keys: List<PublicKey>,
+    supply_change: Int,
+    signers: List<Bool>,
+) -> List<Condition> {
+    let signatures = signatures(public_keys, signers, supply_change as Bytes);
+    assert signatures.count >= threshold;
+    signatures.conditions
+}
+
+struct Signatures {
+    conditions: List<Condition>,
+    count: Int,
+}
+
+fn signatures(public_keys: List<PublicKey>, signers: List<Bool>, message: Bytes) -> Signatures {
+    if public_keys is nil {
+        return Signatures { conditions: nil, count: 0 };
+    }
+
+    let (signs, rest_signers) = if signers is nil {
+        (false, nil)
+    } else {
+        (signers.first, signers.rest)
+    };
+
+    let rest = signatures(public_keys.rest, rest_signers, message);
+
+    if signs {
+        return Signatures {
+            conditions: [AggSigMe { public_key: public_keys.first, message }, ...rest.conditions],
+            count: rest.count + 1,
+        };
+    }
+
+    rest
+}
+
+test fn only_flagged_keys_sign() {
+    let key = 0xa572cbea904d67468808c8eb50a9450c9721db309128012543902d0ac358a62ae28f75bb8f1c7c42c39a8c5529bf0f4e as PublicKey;
+    let keys = [key, key, key];
+
+    let result = signatures(keys, [true, false], 0x2a);
+    assert result.count == 1;
+    assert tree_hash(result.conditions) == tree_hash([AggSigMe {
+        public_key: keys.first,
+        message: 0x2a,
+    }]);
+
+    // Missing flags count as not signing.
+    assert signatures(keys, nil, 0x2a).count == 0;
+    assert signatures(keys, [false, true, true], 0x2a).count == 2;
+}

@@ -1,0 +1,41 @@
+// A TAIL that allows any supply change authorized by a singleton.
+//
+// The singleton authorizes a supply change by sending a message to the DOG coin, with the mode
+// `SENDER_PUZZLE | RECEIVER_COIN` (the singleton's puzzle hash to the DOG coin's id). The message
+// is the supply change, so it can't be used for another coin or another amount. Each message is
+// received exactly once, and the singleton spend can't be repeated, so it can't be reused either.
+//
+// The singleton puzzle hash depends on its inner puzzle hash, which is given in the solution. The
+// launcher id in the singleton struct is what identifies the singleton, so its inner puzzle can
+// change between authorizations.
+//
+// A singleton that authorizes a supply change for a coin with a lineage proof also authorizes the
+// same supply change for that coin without one, in which case the execution coin's amount is the
+// supply change, rather than the coin's amount plus it. This doesn't matter when the inner puzzle
+// signs the execution coin's id (which includes its amount), but an inner puzzle that doesn't (such
+// as the settlement payments puzzle) could be spent the other way by anyone while it's in the
+// mempool.
+//
+// Curried arguments:
+// - `singleton_mod_hash` is the hash of the singleton top layer v1.1.
+// - `singleton_struct_hash` is the tree hash of `(SINGLETON_MOD_HASH . (LAUNCHER_ID .
+//   SINGLETON_LAUNCHER_HASH))`.
+
+// The singleton commits to its puzzle hash, and the DOG coin to its coin id.
+const AUTHORIZATION_MODE: Int = 0b010_111;
+
+fn main(
+    singleton_mod_hash: Bytes32,
+    singleton_struct_hash: Bytes32,
+    supply_change: Int,
+    singleton_inner_puzzle_hash: Bytes32,
+) -> List<Condition> {
+    [ReceiveMessage {
+        mode: AUTHORIZATION_MODE,
+        message: supply_change as Bytes,
+        sender: [curry_tree_hash(
+            singleton_mod_hash,
+            [singleton_struct_hash, singleton_inner_puzzle_hash],
+        )],
+    }]
+}

@@ -57,6 +57,17 @@ The TAIL runs in the DOG coin's spend, so `AGG_SIG_ME` and `ASSERT_MY_*` conditi
 - [`genesis_by_coin_id`](puzzles/tails/genesis_by_coin_id.rue) asserts that the DOG coin's parent is the genesis coin, so tokens can only be issued once, and never melted. It doesn't require a signature, so the eve coin's inner puzzle must fix its own outputs, as the driver's quoted conditions do.
 - [`everything_with_signature`](puzzles/tails/everything_with_signature.rue) requires an `AGG_SIG_ME` signature of the supply change by a public key, so the key's owner can issue or melt at any time.
 
+There are also TAILs for other policies, each with its rules and caveats in its header comment:
+
+- [`everything_with_singleton`](puzzles/tails/everything_with_singleton.rue) requires a message from a singleton to the DOG coin containing the supply change, so whoever controls the singleton can issue or melt, and each authorization is for one coin and one amount.
+- [`capped_supply`](puzzles/tails/capped_supply.rue) is like `everything_with_singleton`, but the singleton's inner puzzle must be the [supply counter](puzzles/tails/supply_counter.rue), which adds up what it authorizes and can never authorize more than a cap in total. Melting doesn't make room under the cap.
+- [`burnable`](puzzles/tails/burnable.rue) wraps another TAIL, and lets holders melt their own tokens without it. Wrapping `genesis_by_coin_id` gives a fixed supply that can only go down.
+- [`issuance_deadline`](puzzles/tails/issuance_deadline.rue) wraps another TAIL, and only allows issuing before a timestamp. Melting is allowed at any time, if the other TAIL allows it.
+- [`delegated_tail`](puzzles/tails/delegated_tail.rue) runs any TAIL whose tree hash is signed by a public key. A signed TAIL can be used by anyone, forever, so it should only be one that's safe for anyone to use.
+- [`multisig`](puzzles/tails/multisig.rue) requires `AGG_SIG_ME` signatures of the supply change by at least `m` of `n` public keys.
+
+A TAIL only sees the supply change, not the coin's amount before or after it. A coin with a lineage proof can also be spent without one, in which case the same supply change gives a different amount, so an authorization of a supply change for a coin doesn't fix the amount of its execution coin. The owner's signature does, for inner puzzles that sign the execution coin's id.
+
 The TAIL can't change a coin's amount without its owner's consent. The owner's inner puzzle usually signs with `AGG_SIG_ME`, which commits to the execution coin's id, and the id includes the amount after the supply change. Inner puzzles that don't sign anything (such as the settlement payments puzzle) can be issued into or melted by anyone the TAIL allows, while they're in the mempool.
 
 ### Asset id and metadata
@@ -146,6 +157,7 @@ rue fmt --check puzzles
 | --- | --- |
 | [`transfers`](tests/transfers.rs) | Sending, splitting, merging, zero amounts, fees, several assets, wallet syncing |
 | [`supply`](tests/supply.rs) | Issuing, melting, both standard TAILs, what the TAIL sees, `u64::MAX`, metadata |
+| [`tails`](tests/tails.rs) | Issuing and melting with the other TAILs, and the supply changes they reject |
 | [`offers`](tests/offers.rs) | XCH for DOG, DOG for XCH, DOG for DOG, underpaying, paying with the wrong asset |
 | [`attacks`](tests/attacks.rs) | Fake TAILs, negative and oversized outputs, forged DOG and execution coins, joining the ring, ring messages from inner puzzles, tampered solutions, replayed signatures |
 | [`properties`](tests/properties.rs) | Random balanced rings conserve supply, and unbalanced rings are rejected |

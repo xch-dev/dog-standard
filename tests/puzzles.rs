@@ -12,9 +12,12 @@ use chia_wallet_sdk::{
     types::compile_rue,
 };
 use dog::{
-    DOG_EXEC_PUZZLE, DOG_EXEC_PUZZLE_HASH, DOG_PUZZLE, DOG_PUZZLE_HASH,
-    EVERYTHING_WITH_SIGNATURE_TAIL, EVERYTHING_WITH_SIGNATURE_TAIL_HASH, GENESIS_BY_COIN_ID_TAIL,
-    GENESIS_BY_COIN_ID_TAIL_HASH,
+    BURNABLE_TAIL, BURNABLE_TAIL_HASH, CAPPED_SUPPLY_TAIL, CAPPED_SUPPLY_TAIL_HASH, DELEGATED_TAIL,
+    DELEGATED_TAIL_HASH, DOG_EXEC_PUZZLE, DOG_EXEC_PUZZLE_HASH, DOG_PUZZLE, DOG_PUZZLE_HASH,
+    EVERYTHING_WITH_SIGNATURE_TAIL, EVERYTHING_WITH_SIGNATURE_TAIL_HASH,
+    EVERYTHING_WITH_SINGLETON_TAIL, EVERYTHING_WITH_SINGLETON_TAIL_HASH, GENESIS_BY_COIN_ID_TAIL,
+    GENESIS_BY_COIN_ID_TAIL_HASH, ISSUANCE_DEADLINE_TAIL, ISSUANCE_DEADLINE_TAIL_HASH,
+    MULTISIG_TAIL, MULTISIG_TAIL_HASH, SUPPLY_COUNTER_PUZZLE, SUPPLY_COUNTER_PUZZLE_HASH,
 };
 use rstest::rstest;
 
@@ -31,6 +34,29 @@ use rstest::rstest;
     &EVERYTHING_WITH_SIGNATURE_TAIL,
     EVERYTHING_WITH_SIGNATURE_TAIL_HASH
 )]
+#[case::everything_with_singleton(
+    "puzzles/tails/everything_with_singleton.rue",
+    &EVERYTHING_WITH_SINGLETON_TAIL,
+    EVERYTHING_WITH_SINGLETON_TAIL_HASH
+)]
+#[case::capped_supply(
+    "puzzles/tails/capped_supply.rue",
+    &CAPPED_SUPPLY_TAIL,
+    CAPPED_SUPPLY_TAIL_HASH
+)]
+#[case::supply_counter(
+    "puzzles/tails/supply_counter.rue",
+    &SUPPLY_COUNTER_PUZZLE,
+    SUPPLY_COUNTER_PUZZLE_HASH
+)]
+#[case::burnable("puzzles/tails/burnable.rue", &BURNABLE_TAIL, BURNABLE_TAIL_HASH)]
+#[case::issuance_deadline(
+    "puzzles/tails/issuance_deadline.rue",
+    &ISSUANCE_DEADLINE_TAIL,
+    ISSUANCE_DEADLINE_TAIL_HASH
+)]
+#[case::delegated_tail("puzzles/tails/delegated_tail.rue", &DELEGATED_TAIL, DELEGATED_TAIL_HASH)]
+#[case::multisig("puzzles/tails/multisig.rue", &MULTISIG_TAIL, MULTISIG_TAIL_HASH)]
 fn compiled_puzzles_are_up_to_date(
     #[case] path: &str,
     #[case] reveal: &[u8],

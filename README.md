@@ -79,6 +79,29 @@ Links to the image and data aren't part of the metadata. Content is checked agai
 
 An indexer can verify the metadata in it against the asset id, but the links in it are just as untrusted as any others.
 
+### Revocation
+
+A DOG can be made revocable, so that its issuer can claw back tokens from any holder. This doesn't need any changes to the DOG puzzles: the owner's p2 puzzle is wrapped in the same [revocation layer](https://github.com/Chia-Network/chia_puzzles/blob/main/puzzles/vc_puzzles/revocation_layer.clsp) that revocable CATs use, and the revocation layer is the DOG's inner puzzle.
+
+```
+                                                    ┌─▶ p2 puzzle (owner): outputs are wrapped in the revocation layer again
+DOG coin ──▶ execution coin ──▶ revocation layer ──┤
+                                                    └─▶ hidden puzzle (issuer): outputs aren't wrapped
+```
+
+The revocation layer's solution chooses whether to run the owner's p2 puzzle or the hidden puzzle (usually the issuer's standard puzzle). When the p2 puzzle runs, every coin it creates is wrapped in the revocation layer again, so the owner can't make tokens unrevocable. When the hidden puzzle runs, its outputs aren't wrapped, unless the hidden puzzle wraps them itself.
+
+Since the revocation layer is just an inner puzzle:
+
+- **Supply is still conserved.** The hidden puzzle's outputs go through the execution coin like any other inner puzzle's, so they're wrapped in DOG coins and counted in the ring. It can't create or destroy tokens, take part in another coin's ring, or skip the ring. Only the TAIL can change the supply, and revoking and melting are separate permissions (an issuer with both can do both in the same spend).
+- **Revocation can't be tampered with.** If the hidden puzzle signs with `AGG_SIG_ME` (as the standard puzzle does), the signature commits to the execution coin and the hidden puzzle's output. Anyone can see the revocation layer's solution, but switching it to the p2 puzzle needs the owner's signature. Like any spend, a holder who sees a revocation in the mempool can try to spend their coin first, so a revocation is only final once it's confirmed.
+- **Several coins can be revoked together.** Revocation spends are ordinary DOG spends, so they can share a ring with each other and with normal owner spends.
+- **Offers work as they do for revocable CATs.** The settlement payments puzzle is wrapped in the revocation layer, so a requested payment of a revocable DOG is asserted from the execution coin with the inner puzzle `revocation_layer(HIDDEN_PUZZLE_HASH, SETTLEMENT_PAYMENT_HASH)`. A payment of unrevocable tokens of the same asset id, or of tokens with a different hidden puzzle, doesn't satisfy it. The issuer can revoke a coin while it's held by the settlement puzzle, which cancels the trade.
+
+Revocability isn't part of the asset id, which only depends on the TAIL and metadata. The same asset can have revocable and unrevocable coins (for example, the issuer revokes tokens into an unrevocable coin), so like revocable CATs, wallets should treat the asset id and the hidden puzzle hash together as the asset. To make sure that every coin of an asset is revocable, issue it with a TAIL that only the issuer can run, and only into the revocation layer.
+
+The DOG coin only commits to the hash of its inner puzzle, so wallets recognise revocable DOGs from the spend of the parent execution coin, which reveals the revocation layer. `Dog::parse_children` follows the same rules as `Cat::parse_children`: coins created by the p2 puzzle are revocable, and coins created by the hidden puzzle aren't, unless their puzzle hash is the revocation layer around the hint.
+
 ### Rules for inner puzzles
 
 The execution coin changes the inner puzzle's conditions in two ways:
@@ -111,8 +134,12 @@ Spending a DOG takes two coin spends instead of one, and creates two coins per o
 | 1 coin to 2 coins | 35,760,177 | 37,324,945 | 1.04x |
 | 3 coins to 1 coin | 93,231,549 | 97,957,742 | 1.05x |
 | 5 coins to 5 coins | 164,727,971 | 172,583,788 | 1.05x |
+| Revocable, owner spend (1 coin to 1 coin) | 43,274,669 | 44,813,341 | 1.04x |
+| Revocable, revocation spend (1 coin to 1 coin) | 43,251,953 | 44,790,625 | 1.04x |
 
 Most of the cost is the 12,000 per byte of the puzzle reveals and solutions, which is what the mempool charges for. The DOG coin puzzle (650 bytes) and execution coin puzzle (947 bytes) are revealed once per coin, like the CAT puzzle. The rest of the difference is the `CREATE_COIN` for each execution coin (1,800,000) and the extra coin spend.
+
+The revocation layer costs about the same for both (about 10.3 million), since it's the same puzzle.
 
 The execution coins are ephemeral, but they still add coin records to the blockchain.
 
@@ -130,6 +157,13 @@ let issuance = Dog::single_issuance(ctx, parent_coin_id, &metadata, &DogUris::de
 
 // Spend DOG coins together, like CATs.
 let children = Dog::spend_all(ctx, &[DogSpend::new(dog, inner_spend)])?;
+
+// Issue revocable tokens, which the hidden puzzle (here, the issuer's standard puzzle) can claw back.
+let issuance = Dog::single_issuance_revocable(ctx, parent_coin_id, issuer_puzzle_hash, &metadata, &DogUris::default(), 1_000_000, conditions)?;
+
+// The owner spends a revocable DOG like any other, and the issuer revokes it with the hidden puzzle.
+let children = Dog::spend_all(ctx, &[DogSpend::new(dog, owner_spend)])?;
+let children = Dog::spend_all(ctx, &[DogSpend::revoke(dog, issuer_spend)])?;
 
 // Find the DOG coins created by an execution coin's spend, to sync a wallet.
 let children = Dog::parse_children(allocator, parent_coin, parent_puzzle, parent_solution)?;
@@ -155,7 +189,8 @@ After changing [`dog.rue`](puzzles/dog.rue), copy the new hash from `puzzles/dis
 | [`transfers`](tests/transfers.rs) | Sending, splitting, merging, zero amounts, fees, several assets, wallet syncing |
 | [`supply`](tests/supply.rs) | Issuing, melting, both standard TAILs, what the TAIL sees, `u64::MAX`, metadata |
 | [`offers`](tests/offers.rs) | XCH for DOG, DOG for XCH, DOG for DOG, underpaying, paying with the wrong asset |
+| [`revocation`](tests/revocation.rs) | Issuing revocable DOGs, owner transfers, revoking without the owner, revoking several coins in a ring, revoking coins held by the settlement puzzle, offers, non-issuers can't revoke, revocation can't change supply, parsing children |
 | [`attacks`](tests/attacks.rs) | Fake TAILs, negative and oversized outputs, forged DOG and execution coins, joining the ring, sending ring messages to the wrong coin, ring messages from inner puzzles, tampered solutions, replayed signatures |
 | [`properties`](tests/properties.rs) | Random balanced rings conserve supply, and unbalanced rings are rejected |
-| [`costs`](tests/costs.rs) | Cost compared to CATs |
+| [`costs`](tests/costs.rs) | Cost compared to CATs, including revocable ones |
 | [`puzzles`](tests/puzzles.rs) | The compiled puzzles match the Rue sources, with no lint diagnostics, and `DOG_MOD_HASH` is up to date |

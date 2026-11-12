@@ -227,10 +227,11 @@ pub fn spend_ring(ctx: &mut SpendContext, items: &[RawRingItem]) -> Result<()> {
                 dog: item.dog,
                 inner_spend: item.inner_spend,
                 tail_spend: item.tail_spend,
+                hidden: false,
             },
             item.exec_amount,
             prev_subtotals[index],
-            next.dog.p2_puzzle_hash,
+            next.dog.inner_puzzle_hash().into(),
         )?;
     }
 

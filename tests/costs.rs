@@ -13,7 +13,7 @@ use chia_wallet_sdk::{
     test::{BlsPairWithCoin, Simulator},
 };
 use common::*;
-use dog::{Dog, DogSpend};
+use dog::{Dog, DogSpend, DogUris};
 
 /// Issues a CAT and splits it into coins with the given amounts.
 fn cat_coins(
@@ -143,6 +143,89 @@ fn cost_compared_to_cat() -> Result<()> {
         assert!(
             dog_cost * 100 < cat_cost * 108,
             "a DOG spend should cost less than 1.08 times a CAT spend ({dog_cost} vs {cat_cost})"
+        );
+    }
+
+    Ok(())
+}
+
+/// The costs of a revocable CAT and a revocable DOG, for the owner's spend and the issuer's
+/// revocation spend, each sending one coin to one coin. Both wrap the p2 puzzle in the same
+/// revocation layer, so the difference is the same as for unrevocable assets.
+fn compare_revocable(revoke: bool) -> Result<(u64, u64)> {
+    let mut sim = Simulator::new();
+    let ctx = &mut SpendContext::new();
+    let issuer = sim.bls(1000);
+    let owner = sim.bls(0);
+    let bob = sim.bls(0);
+    let hidden_puzzle_hash = issuer.puzzle_hash;
+    // The key that signs the measured spend.
+    let signer = if revoke { &issuer } else { &owner };
+
+    let conditions = send(ctx, owner.puzzle_hash, 1000)?;
+    let (parent_conditions, cats) = Cat::single_issuance(
+        ctx,
+        issuer.coin.coin_id(),
+        Some(hidden_puzzle_hash),
+        1000,
+        conditions,
+    )?;
+    StandardLayer::new(issuer.pk).spend(ctx, issuer.coin, parent_conditions)?;
+    submit(&mut sim, ctx, &[issuer.sk.clone()])?;
+
+    let cat_cost = measure(&mut sim, ctx, signer, |ctx| {
+        let conditions = send(ctx, bob.puzzle_hash, 1000)?;
+        let spend = p2(ctx, signer, conditions)?;
+        let cat_spend = if revoke {
+            CatSpend::revoke(cats[0], spend)
+        } else {
+            CatSpend::new(cats[0], spend)
+        };
+        Cat::spend_all(ctx, &[cat_spend])?;
+        Ok(())
+    })?;
+
+    let parent = sim.bls(0);
+    let conditions = send(ctx, owner.puzzle_hash, 1000)?;
+    let issuance = Dog::single_issuance_revocable(
+        ctx,
+        parent.coin.coin_id(),
+        hidden_puzzle_hash,
+        &metadata(),
+        &DogUris::default(),
+        1000,
+        conditions,
+    )?;
+    StandardLayer::new(parent.pk).spend(ctx, parent.coin, issuance.parent_conditions)?;
+    submit(&mut sim, ctx, &[parent.sk])?;
+
+    let dog_cost = measure(&mut sim, ctx, signer, |ctx| {
+        let conditions = send(ctx, bob.puzzle_hash, 1000)?;
+        let spend = p2(ctx, signer, conditions)?;
+        let dog_spend = if revoke {
+            DogSpend::revoke(issuance.children[0], spend)
+        } else {
+            DogSpend::new(issuance.children[0], spend)
+        };
+        Dog::spend_all(ctx, &[dog_spend])?;
+        Ok(())
+    })?;
+
+    #[allow(clippy::cast_precision_loss)]
+    let ratio = dog_cost as f64 / cat_cost as f64;
+    let kind = if revoke { "revocation" } else { "owner" };
+    println!("revocable, {kind} spend: CAT {cat_cost}, DOG {dog_cost} ({ratio:.2}x)");
+
+    Ok((cat_cost, dog_cost))
+}
+
+#[test]
+fn revocable_cost_compared_to_cat() -> Result<()> {
+    for revoke in [false, true] {
+        let (cat_cost, dog_cost) = compare_revocable(revoke)?;
+        assert!(
+            dog_cost * 100 < cat_cost * 150,
+            "a revocable DOG spend should cost less than 1.5 times a revocable CAT spend ({dog_cost} vs {cat_cost})"
         );
     }
 

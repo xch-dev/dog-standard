@@ -109,6 +109,22 @@ The execution coin changes the inner puzzle's conditions in two ways:
 - Each `CREATE_COIN` is wrapped in the DOG coin puzzle with its amount curried, and created with 0 mojos. The amount must be between 0 and `u64::MAX`, and it's converted to canonical form. Memos are kept, but the puzzle hash changes with the amount, so wallets need a hint (usually the inner puzzle hash) to find the coin. The driver doesn't add hints, since the right hint depends on the inner puzzle.
 - `SEND_MESSAGE` and `RECEIVE_MESSAGE` conditions with mode `0b000010` (from anyone to a puzzle hash) whose message starts with `0xd0` are rejected, since they could take the place of ring messages. All other conditions are passed through.
 
+## Extending DOG
+
+Features like transfer fees and credential restrictions are built as an inner puzzle **layer**, like they would be for a CAT. The layer wraps the holder's inner puzzle, and wraps every coin it creates in the same layer, so the rule applies to every future holder. The execution coin then wraps those coins in DOG coins as usual. A layer sees an ordinary coin, so it can use `ASSERT_MY_AMOUNT` to learn the token amount, and messages or `ASSERT_CONCURRENT_SPEND` to coordinate with other coins in the spend. It can also learn the asset id or its own puzzle hash by currying them in or asserting them with `ASSERT_MY_PUZZLE_HASH`, but it doesn't need to: the DOG coin commits to the inner puzzle hash, so a holder can't remove the layer.
+
+There are two examples in [`puzzles/layers`](puzzles/layers), tested in [`tests/extensions.rs`](tests/extensions.rs). They're proofs of concept, and aren't part of the standard:
+
+- [`transfer_fee`](puzzles/layers/transfer_fee.rue) pays the issuer a share of the tokens that leave a holder, in the token itself. The fee is charged on the coin's amount minus its change, not on what it sends, since otherwise two holders could spend together and have the receiver create the tokens as their own change.
+- [`credential_restriction`](puzzles/layers/credential_restriction.rue) requires a credential (a signature from an authority over a puzzle hash and an expiry) for the holder and for every recipient. Revoking a credential, by not renewing it, freezes the holder's tokens.
+
+Things to know when writing a layer:
+
+- **Every coin of the asset must be in the layer.** The ring only checks the total, so a coin of the same asset outside the layer (even one worth 0 tokens) could join a spend and take the tokens out. The TAIL, or the eve coin's inner puzzle, must make sure that tokens are only issued into the layer. TAILs can't see the inner puzzle hash or its conditions, unlike CAT TAILs, so a TAIL that issues without a signature has to prove the inner puzzle hash with `ASSERT_MY_PUZZLE_HASH` itself.
+- **Relative time conditions don't work in inner puzzles.** The execution coin is ephemeral, and consensus rejects relative time conditions (such as `ASSERT_SECONDS_RELATIVE`) on ephemeral coins. Absolute ones work, so vesting schedules and the standard clawback do too.
+- **Messages to a puzzle hash from anyone that start with `0xd0` are rejected.** A layer that sends or receives a hash with mode `0b000010` should add a prefix byte, or it will fail 1 time in 256. Every other mode is unrestricted.
+- `ASSERT_MY_COIN_ID`, `ASSERT_MY_PARENT_ID` and `AGG_SIG_ME` apply to the execution coin, whose parent is the DOG coin, so a layer that checks its own lineage needs to go back two coins.
+
 ## Puzzles
 
 | Puzzle | Curried arguments | Solution |
@@ -194,3 +210,4 @@ After changing [`dog.rue`](puzzles/dog.rue), copy the new hash from `puzzles/dis
 | [`properties`](tests/properties.rs) | Random balanced rings conserve supply, and unbalanced rings are rejected |
 | [`costs`](tests/costs.rs) | Cost compared to CATs, including revocable ones |
 | [`puzzles`](tests/puzzles.rs) | The compiled puzzles match the Rue sources, with no lint diagnostics, and `DOG_MOD_HASH` is up to date |
+| [`extensions`](tests/extensions.rs) | Example transfer fee and credential layers can't be bypassed, and which time conditions work in inner puzzles |

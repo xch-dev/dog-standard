@@ -47,6 +47,29 @@ fn compiled_puzzles_are_up_to_date(
     Ok(())
 }
 
+/// The execution coin puzzle includes the hash of the DOG coin puzzle as a constant, which has to
+/// be updated by hand when the DOG coin puzzle changes.
+#[test]
+fn dog_mod_hash_constant_is_up_to_date() -> Result<()> {
+    let shared = std::fs::read_to_string("puzzles/shared.rue")?;
+    let hash = hex::encode(DOG_PUZZLE_HASH.to_bytes());
+    assert!(
+        shared.contains(&format!("DOG_MOD_HASH: Bytes32 = 0x{hash};"))
+            || shared.contains(&format!("DOG_MOD_HASH: Bytes32 =\n    0x{hash};")),
+        "update `DOG_MOD_HASH` in `puzzles/shared.rue` to 0x{hash}, then rebuild the puzzles"
+    );
+
+    // It's in the compiled execution coin puzzle, as a quoted 32 byte atom.
+    let atom = [&[0xa0][..], DOG_PUZZLE_HASH.as_ref()].concat();
+    assert!(
+        DOG_EXEC_PUZZLE
+            .windows(atom.len())
+            .any(|window| window == atom.as_slice())
+    );
+
+    Ok(())
+}
+
 /// Every lint is denied in `Rue.toml`, so the puzzles must compile without any diagnostics.
 #[test]
 fn puzzles_have_no_diagnostics() -> Result<()> {

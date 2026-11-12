@@ -595,6 +595,67 @@ fn ring_cant_be_joined_by_other_coins() -> Result<()> {
     Ok(())
 }
 
+/// Ring messages are sent to the puzzle hash of the next execution coin, so in a ring of coins with
+/// different inner puzzles, each subtotal has to go to the right inner puzzle hash.
+#[test]
+fn ring_messages_go_to_the_next_inner_puzzle() -> Result<()> {
+    let mut sim = Simulator::new();
+    let ctx = &mut SpendContext::new();
+
+    let alice = sim.bls(0);
+    let bob = sim.bls(0);
+    let dog = issue_single(&mut sim, ctx, &alice, 1000)?;
+    let coins = transfer(
+        &mut sim,
+        ctx,
+        &alice,
+        dog,
+        &[(alice.puzzle_hash, 400), (bob.puzzle_hash, 600)],
+    )?;
+
+    // Alice's coin creates 1000 and Bob's creates nothing, so each one is unbalanced by itself.
+    let items = |ctx: &mut SpendContext| -> Result<[RawRingItem; 2]> {
+        let conditions = send(ctx, alice.puzzle_hash, 1000)?;
+        Ok([
+            RawRingItem::new(coins[0], p2(ctx, &alice, conditions)?, 1000),
+            RawRingItem::new(coins[1], p2(ctx, &bob, Conditions::new())?, 0),
+        ])
+    };
+
+    // If each coin sends its subtotal to its own inner puzzle hash, the subtotals that Alice's coin
+    // sends and receives would have to be equal, so it fails whatever the subtotals are.
+    for (first, second) in [(0, 0), (0, 600), (-600, 0), (600, -600)] {
+        let [alice_item, bob_item] = items(ctx)?;
+        coins[0].spend(
+            ctx,
+            DogSpend::new(coins[0], alice_item.inner_spend),
+            400,
+            first,
+            alice.puzzle_hash,
+        )?;
+        coins[1].spend(
+            ctx,
+            DogSpend::new(coins[1], bob_item.inner_spend),
+            600,
+            second,
+            bob.puzzle_hash,
+        )?;
+        assert_eq!(
+            submit_err(&mut sim, ctx, &[alice.sk.clone(), bob.sk.clone()]),
+            ErrorCode::MessageNotSentOrReceived,
+            "subtotals {first} and {second}"
+        );
+    }
+
+    // Linked to each other, they balance.
+    let items = items(ctx)?;
+    spend_ring(ctx, &items)?;
+    submit(&mut sim, ctx, &[alice.sk, bob.sk])?;
+    assert_unspent(&sim, &coins[0].child(400, alice.puzzle_hash, 1000));
+
+    Ok(())
+}
+
 #[test]
 fn inner_puzzle_cant_use_ring_messages() -> Result<()> {
     let mut sim = Simulator::new();

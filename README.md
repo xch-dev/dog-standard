@@ -33,6 +33,8 @@ The inner puzzle sees an ordinary coin: its amount in mojos is the token amount,
 
 The execution coins spent together form a ring of messages. Each one sends the next one the running total of the coin amounts minus the amounts of the coins they create. Each execution coin must send and receive exactly one ring message, so the ring only closes if the total created equals the total spent. This is the same idea as the CAT ring, but with messages instead of announcements, so ring messages can't be reused or shared.
 
+A ring message is sent to the puzzle hash of the next execution coin (which only depends on its inner puzzle hash), and received from anyone. That's enough, since any coin with the puzzle hash of an execution coin can only be spent by receiving a message from its parent DOG coin, and consensus requires every message to be received exactly as many times as it's sent. The ring messages sent to execution coins are exactly the ones they receive, so a message from any other coin would leave one of theirs unreceived, and adding up the subtotals shows that the total amount of the execution coins of an asset equals the total they create.
+
 The amount of an execution coin is the DOG coin's amount, unless the TAIL is run. The **supply change** is the amount of the execution coin minus the amount that's proven by the lineage proof:
 
 | Lineage proof | TAIL reveal | Execution coin amount | Supply change   |
@@ -82,18 +84,20 @@ An indexer can verify the metadata in it against the asset id, but the links in 
 The execution coin changes the inner puzzle's conditions in two ways:
 
 - Each `CREATE_COIN` is wrapped in the DOG coin puzzle with its amount curried, and created with 0 mojos. The amount must be between 0 and `u64::MAX`, and it's converted to canonical form. Memos are kept, but the puzzle hash changes with the amount, so wallets need a hint (usually the inner puzzle hash) to find the coin. The driver doesn't add hints, since the right hint depends on the inner puzzle.
-- `SEND_MESSAGE` and `RECEIVE_MESSAGE` conditions with mode `0b111111` (coin id to coin id) whose message starts with `0xd0` are rejected, since they could take the place of ring messages. All other conditions are passed through.
+- `SEND_MESSAGE` and `RECEIVE_MESSAGE` conditions with mode `0b000010` (from anyone to a puzzle hash) whose message starts with `0xd0` are rejected, since they could take the place of ring messages. All other conditions are passed through.
 
 ## Puzzles
 
 | Puzzle | Curried arguments | Solution |
 | --- | --- | --- |
-| [`dog.rue`](puzzles/dog.rue) | `DOG_MOD_HASH EXEC_MOD_HASH ASSET_ID INNER_PUZZLE_HASH AMOUNT` | `my_coin_id lineage_proof tail_spend` |
-| [`dog_exec.rue`](puzzles/dog_exec.rue) | `DOG_MOD_HASH EXEC_MOD_HASH ASSET_ID INNER_PUZZLE` | `inner_solution my_amount parent_amount prev_coin_id prev_subtotal next_coin_proof` |
+| [`dog.rue`](puzzles/dog.rue) | `INNER_PUZZLE_HASH AMOUNT ASSET` | `my_coin_id lineage_proof tail_spend` |
+| [`dog_exec.rue`](puzzles/dog_exec.rue) | `INNER_PUZZLE ASSET` | `inner_solution my_amount parent_amount prev_subtotal next_inner_puzzle_hash` |
 
+- `ASSET` is the pair `(EXEC_MOD_HASH . ASSET_ID)`. The arguments that differ between coins come first, so the hash of the rest is calculated once per spend.
+- The DOG coin puzzle doesn't curry its own mod hash. The execution coin puzzle includes it as a constant (`DOG_MOD_HASH` in [`shared.rue`](puzzles/shared.rue)), and the DOG coin puzzle doesn't need it.
 - `lineage_proof` is `(parent_parent_coin_info parent_inner_puzzle_hash parent_amount)` or nil.
 - `tail_spend` is `(tail metadata_hash delta . tail_solution)` or nil.
-- `next_coin_proof` is `(parent_coin_info inner_puzzle_hash amount)` of the next execution coin.
+- `next_inner_puzzle_hash` is the inner puzzle hash of the next execution coin in the ring.
 
 The DOG coin outputs `ASSERT_MY_COIN_ID`, `CREATE_COIN` for the execution coin, a message to it with mode `0b010111` (its puzzle hash to the execution coin's id) containing the amount, `ASSERT_MY_PARENT_ID` if there's a lineage proof, and the TAIL's conditions. The execution coin receives that message, sends and receives a ring message, and outputs the inner puzzle's conditions.
 
@@ -103,10 +107,12 @@ Spending a DOG takes two coin spends instead of one, and creates two coins per o
 
 | Spend | CAT | DOG | Ratio |
 | --- | --- | --- | --- |
-| 1 coin to 1 coin | 32,969,564 | 41,929,229 | 1.27x |
-| 1 coin to 2 coins | 35,760,177 | 44,730,102 | 1.25x |
-| 3 coins to 1 coin | 93,231,549 | 120,042,053 | 1.29x |
-| 5 coins to 5 coins | 164,727,971 | 209,478,413 | 1.27x |
+| 1 coin to 1 coin | 32,969,564 | 34,545,504 | 1.05x |
+| 1 coin to 2 coins | 35,760,177 | 37,324,945 | 1.04x |
+| 3 coins to 1 coin | 93,231,549 | 97,957,742 | 1.05x |
+| 5 coins to 5 coins | 164,727,971 | 172,583,788 | 1.05x |
+
+Most of the cost is the 12,000 per byte of the puzzle reveals and solutions, which is what the mempool charges for. The DOG coin puzzle (650 bytes) and execution coin puzzle (947 bytes) are revealed once per coin, like the CAT puzzle. The rest of the difference is the `CREATE_COIN` for each execution coin (1,800,000) and the extra coin spend.
 
 The execution coins are ephemeral, but they still add coin records to the blockchain.
 
@@ -140,6 +146,8 @@ rue test
 rue fmt --check puzzles
 ```
 
+After changing [`dog.rue`](puzzles/dog.rue), copy the new hash from `puzzles/dist/dog.rue.hash` into `DOG_MOD_HASH` in [`shared.rue`](puzzles/shared.rue), and build again.
+
 `cargo test` checks that the compiled puzzles are up to date and have no lint diagnostics, and runs the tests:
 
 | Tests | What they cover |
@@ -147,7 +155,7 @@ rue fmt --check puzzles
 | [`transfers`](tests/transfers.rs) | Sending, splitting, merging, zero amounts, fees, several assets, wallet syncing |
 | [`supply`](tests/supply.rs) | Issuing, melting, both standard TAILs, what the TAIL sees, `u64::MAX`, metadata |
 | [`offers`](tests/offers.rs) | XCH for DOG, DOG for XCH, DOG for DOG, underpaying, paying with the wrong asset |
-| [`attacks`](tests/attacks.rs) | Fake TAILs, negative and oversized outputs, forged DOG and execution coins, joining the ring, ring messages from inner puzzles, tampered solutions, replayed signatures |
+| [`attacks`](tests/attacks.rs) | Fake TAILs, negative and oversized outputs, forged DOG and execution coins, joining the ring, sending ring messages to the wrong coin, ring messages from inner puzzles, tampered solutions, replayed signatures |
 | [`properties`](tests/properties.rs) | Random balanced rings conserve supply, and unbalanced rings are rejected |
 | [`costs`](tests/costs.rs) | Cost compared to CATs |
-| [`puzzles`](tests/puzzles.rs) | The compiled puzzles match the Rue sources, with no lint diagnostics |
+| [`puzzles`](tests/puzzles.rs) | The compiled puzzles match the Rue sources, with no lint diagnostics, and `DOG_MOD_HASH` is up to date |

@@ -141,8 +141,8 @@ fn cost_compared_to_cat() -> Result<()> {
     ] {
         let (cat_cost, dog_cost) = compare(inputs, outputs)?;
         assert!(
-            dog_cost * 100 < cat_cost * 150,
-            "a DOG spend should cost less than 1.5 times a CAT spend ({dog_cost} vs {cat_cost})"
+            dog_cost * 100 < cat_cost * 108,
+            "a DOG spend should cost less than 1.08 times a CAT spend ({dog_cost} vs {cat_cost})"
         );
     }
 

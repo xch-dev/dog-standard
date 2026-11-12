@@ -10,7 +10,7 @@ use chia_wallet_sdk::{
     chia::{
         consensus::validation_error::ErrorCode,
         protocol::{Bytes, Bytes32, Coin, SpendBundle},
-        puzzle_types::{CoinProof, LineageProof, Memos},
+        puzzle_types::{LineageProof, Memos},
     },
     clvm_traits::clvm_list,
     clvmr::NodePtr,
@@ -339,13 +339,8 @@ fn forged_exec_coin_is_rejected() -> Result<()> {
         inner_solution: inner_spend.solution,
         my_amount: 500,
         parent_amount: 500,
-        prev_coin_id: exec_coin.coin_id(),
         prev_subtotal: 0,
-        next_coin_proof: CoinProof {
-            parent_coin_info: exec_coin.parent_coin_info,
-            inner_puzzle_hash: alice.puzzle_hash,
-            amount: 500,
-        },
+        next_inner_puzzle_hash: alice.puzzle_hash,
     })?;
     ctx.spend(exec_coin, Spend::new(exec_puzzle, exec_solution))?;
     assert_eq!(
@@ -417,8 +412,8 @@ fn exec_coin_cant_lie_about_amounts() -> Result<()> {
         ("my_amount", |solution| solution.my_amount += 1),
         ("parent_amount", |solution| solution.parent_amount += 1),
         ("prev_subtotal", |solution| solution.prev_subtotal += 1),
-        ("next_coin_proof", |solution| {
-            solution.next_coin_proof.amount += 1;
+        ("next_inner_puzzle_hash", |solution| {
+            solution.next_inner_puzzle_hash = Bytes32::new([7; 32]);
         }),
     ];
 
@@ -490,16 +485,35 @@ fn subtotals_are_relative() -> Result<()> {
         ctx,
         DogSpend::new(dog, inner_spend),
         1000,
-        dog.exec_coin(1000).coin_id(),
         12345,
-        CoinProof {
-            parent_coin_info: dog.coin.coin_id(),
-            inner_puzzle_hash: alice.puzzle_hash,
-            amount: 1000,
-        },
+        alice.puzzle_hash,
     )?;
     submit(&mut sim, ctx, &[alice.sk])?;
 
+    Ok(())
+}
+
+/// The message mode of the ring, in which the sender commits to nothing and the receiver commits
+/// to its puzzle hash.
+const RING_MODE: u8 = 0b000_010;
+
+/// An XCH coin that sends a ring message to an execution coin's puzzle hash, and optionally receives
+/// one, to try to take part in the ring.
+fn ring_attacker(
+    ctx: &mut SpendContext,
+    attacker: &chia_wallet_sdk::test::BlsPairWithCoin,
+    send: (i128, Bytes32),
+    receive: Option<i128>,
+) -> Result<()> {
+    let mut conditions =
+        vec![ctx.alloc(&clvm_list!(66, RING_MODE, ring_message(send.0), send.1))?];
+    if let Some(subtotal) = receive {
+        conditions.push(ctx.alloc(&clvm_list!(67, RING_MODE, ring_message(subtotal)))?);
+    }
+    let delegated = ctx.alloc(&chia_wallet_sdk::clvm_traits::clvm_quote!(conditions))?;
+    let attacker_spend = StandardLayer::new(attacker.pk)
+        .delegated_inner_spend(ctx, Spend::new(delegated, NodePtr::NIL))?;
+    ctx.spend(attacker.coin, attacker_spend)?;
     Ok(())
 }
 
@@ -517,62 +531,66 @@ fn ring_cant_be_joined_by_other_coins() -> Result<()> {
         dog,
         &[(alice.puzzle_hash, 400), (alice.puzzle_hash, 600)],
     )?;
-
-    // An XCH coin sends a ring message to the first execution coin, claiming that the previous
-    // subtotal is -5000, so it could create 5000 more tokens than it has.
+    let exec_puzzle_hash: Bytes32 = coins[0].exec_puzzle_hash().into();
     let attacker = sim.bls(0);
-    let first_exec = coins[0].exec_coin(400);
-    let second_exec = coins[1].exec_coin(600);
 
-    let fake_message = ctx.alloc(&clvm_list!(
-        66,
-        63,
-        ring_message(-5000),
-        first_exec.coin_id()
-    ))?;
-    let delegated = ctx.alloc(&chia_wallet_sdk::clvm_traits::clvm_quote!(clvm_list!(
-        fake_message
-    )))?;
-    let attacker_spend = StandardLayer::new(attacker.pk)
-        .delegated_inner_spend(ctx, Spend::new(delegated, NodePtr::NIL))?;
-    ctx.spend(attacker.coin, attacker_spend)?;
+    // An XCH coin sends a ring message to the execution coins' puzzle hash, claiming that the
+    // previous subtotal is -5000, so that the first coin could create 5000 more tokens than it has.
+    // The first coin sends -10000 on to the second coin, which creates nothing and sends -9400.
+    //
+    // There are three ring messages sent to the execution coins, but only two received, so it fails
+    // whether or not the attacker tries to receive the last one. It can't, since a message sent to
+    // the puzzle hash of an execution coin can only be received by an execution coin.
+    for receive in [None, Some(-9400)] {
+        ring_attacker(ctx, &attacker, (-5000, exec_puzzle_hash), receive)?;
 
-    // The first coin creates 5400, and the second creates nothing. Each coin receives one ring
-    // message, so the second coin's message to the first one can never be received.
+        let conditions = send(ctx, alice.puzzle_hash, 5400)?;
+        let first_inner = p2(ctx, &alice, conditions)?;
+        let second_inner = p2(ctx, &alice, Conditions::new())?;
+        coins[0].spend(
+            ctx,
+            DogSpend::new(coins[0], first_inner),
+            400,
+            -5000,
+            alice.puzzle_hash,
+        )?;
+        coins[1].spend(
+            ctx,
+            DogSpend::new(coins[1], second_inner),
+            600,
+            -10000,
+            alice.puzzle_hash,
+        )?;
+
+        assert_eq!(
+            submit_err(&mut sim, ctx, &[alice.sk.clone(), attacker.sk.clone()]),
+            ErrorCode::MessageNotSentOrReceived,
+            "receive: {receive:?}"
+        );
+    }
+
+    // The same goes for an attacker that tries to take the place of the second coin, by receiving
+    // the first coin's message and sending one back that makes up the difference. The first coin's
+    // message is sent to an execution coin's puzzle hash, so the attacker can't receive it.
+    ring_attacker(ctx, &attacker, (-5000, exec_puzzle_hash), Some(-10000))?;
     let conditions = send(ctx, alice.puzzle_hash, 5400)?;
     let first_inner = p2(ctx, &alice, conditions)?;
-    let second_inner = p2(ctx, &alice, Conditions::new())?;
-
     coins[0].spend(
         ctx,
         DogSpend::new(coins[0], first_inner),
         400,
-        attacker.coin.coin_id(),
         -5000,
-        CoinProof {
-            parent_coin_info: coins[1].coin.coin_id(),
-            inner_puzzle_hash: alice.puzzle_hash,
-            amount: 600,
-        },
+        alice.puzzle_hash,
     )?;
-    coins[1].spend(
-        ctx,
-        DogSpend::new(coins[1], second_inner),
-        600,
-        first_exec.coin_id(),
-        0,
-        CoinProof {
-            parent_coin_info: coins[0].coin.coin_id(),
-            inner_puzzle_hash: alice.puzzle_hash,
-            amount: 400,
-        },
-    )?;
-    assert_ne!(first_exec.coin_id(), second_exec.coin_id());
-
     assert_eq!(
-        submit_err(&mut sim, ctx, &[alice.sk.clone(), attacker.sk]),
+        submit_err(&mut sim, ctx, &[alice.sk.clone(), attacker.sk.clone()]),
         ErrorCode::MessageNotSentOrReceived
     );
+
+    // The honest ring works.
+    let spends = ring_spends(ctx, &alice, &coins)?;
+    Dog::spend_all(ctx, &spends)?;
+    submit(&mut sim, ctx, &[alice.sk])?;
 
     Ok(())
 }
@@ -594,7 +612,7 @@ fn inner_puzzle_cant_use_ring_messages() -> Result<()> {
         ] {
             let conditions = ctx.alloc(&clvm_list!(
                 clvm_list!(51, alice.puzzle_hash, 1000),
-                clvm_list!(opcode, 63, message, target)
+                clvm_list!(opcode, RING_MODE, message, target)
             ))?;
             let inner_spend = raw_p2(ctx, &alice, conditions)?;
             spend_ring(ctx, &[RawRingItem::new(dog, inner_spend, 1000)])?;
@@ -619,11 +637,13 @@ fn inner_puzzle_can_use_other_messages() -> Result<()> {
     let dog = issue_single(&mut sim, ctx, &alice, 1000)?;
     let exec_coin = dog.exec_coin(1000);
 
-    // Coin to coin messages that don't start with the prefix, or that use other modes, are fine.
+    // Coin to coin messages are fine, even if they start with the prefix, since that isn't the
+    // mode of the ring.
     let messages = [
         (63, Bytes::new(vec![0x01, RING_PREFIX])),
         (63, Bytes::new(Vec::new())),
         (63, Bytes::new(b"hello".to_vec())),
+        (63, ring_message(0)),
     ];
 
     let mut inner_conditions = vec![ctx.alloc(&clvm_list!(51, alice.puzzle_hash, 1000))?];

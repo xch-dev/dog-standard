@@ -219,7 +219,6 @@ pub fn spend_ring(ctx: &mut SpendContext, items: &[RawRingItem]) -> Result<()> {
     }
 
     for (index, item) in items.iter().enumerate() {
-        let prev = &items[(index + items.len() - 1) % items.len()];
         let next = &items[(index + 1) % items.len()];
 
         item.dog.spend(
@@ -230,13 +229,8 @@ pub fn spend_ring(ctx: &mut SpendContext, items: &[RawRingItem]) -> Result<()> {
                 tail_spend: item.tail_spend,
             },
             item.exec_amount,
-            prev.dog.exec_coin(prev.exec_amount).coin_id(),
             prev_subtotals[index],
-            chia_wallet_sdk::chia::puzzle_types::CoinProof {
-                parent_coin_info: next.dog.coin.coin_id(),
-                inner_puzzle_hash: next.dog.p2_puzzle_hash,
-                amount: next.exec_amount,
-            },
+            next.dog.p2_puzzle_hash,
         )?;
     }
 

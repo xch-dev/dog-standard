@@ -2,7 +2,7 @@ use chia_wallet_sdk::{
     chia::{
         bls::PublicKey,
         protocol::{Bytes32, Coin},
-        puzzle_types::{CoinProof, LineageProof, Memos},
+        puzzle_types::{LineageProof, Memos},
     },
     clvm_traits::FromClvm,
     clvm_utils::{ToTreeHash, TreeHash, tree_hash},
@@ -196,31 +196,14 @@ impl Dog {
         }
 
         for (index, spend) in spends.iter().enumerate() {
-            let prev_index = if index == 0 {
-                spends.len() - 1
-            } else {
-                index - 1
-            };
-            let next_index = if index == spends.len() - 1 {
-                0
-            } else {
-                index + 1
-            };
-
-            let prev = &spends[prev_index];
-            let next = &spends[next_index];
+            let next = &spends[(index + 1) % spends.len()];
 
             spend.dog.spend(
                 ctx,
                 *spend,
                 exec_amounts[index],
-                prev.dog.exec_coin(exec_amounts[prev_index]).coin_id(),
                 prev_subtotals[index],
-                CoinProof {
-                    parent_coin_info: next.dog.coin.coin_id(),
-                    inner_puzzle_hash: next.dog.p2_puzzle_hash,
-                    amount: exec_amounts[next_index],
-                },
+                next.dog.p2_puzzle_hash,
             )?;
         }
 
@@ -229,15 +212,17 @@ impl Dog {
 
     /// Spends this DOG coin and its execution coin, given its position in the ring.
     ///
+    /// The execution coin receives `prev_subtotal` from the previous execution coin in the ring,
+    /// and sends its own subtotal to the next one, which is identified by its inner puzzle hash.
+    ///
     /// Most callers should use [`Dog::spend_all`], which calculates the ring for them.
     pub fn spend(
         &self,
         ctx: &mut SpendContext,
         spend: DogSpend,
         exec_amount: u64,
-        prev_coin_id: Bytes32,
         prev_subtotal: i128,
-        next_coin_proof: CoinProof,
+        next_inner_puzzle_hash: Bytes32,
     ) -> Result<(), DogError> {
         let dog_puzzle = ctx.curry(DogArgs::new(
             self.asset_id,
@@ -256,9 +241,8 @@ impl Dog {
             inner_solution: spend.inner_spend.solution,
             my_amount: exec_amount,
             parent_amount: self.amount,
-            prev_coin_id,
             prev_subtotal,
-            next_coin_proof,
+            next_inner_puzzle_hash,
         })?;
         ctx.spend(
             self.exec_coin(exec_amount),

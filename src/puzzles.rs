@@ -7,11 +7,7 @@
 use std::borrow::Cow;
 
 use chia_wallet_sdk::{
-    chia::{
-        bls::PublicKey,
-        protocol::Bytes32,
-        puzzle_types::{CoinProof, LineageProof},
-    },
+    chia::{bls::PublicKey, protocol::Bytes32, puzzle_types::LineageProof},
     clvm_traits::{FromClvm, ToClvm},
     clvm_utils::TreeHash,
     types::Mod,
@@ -199,10 +195,10 @@ pub struct DogExecSolution<I> {
     pub my_amount: u64,
     /// The token amount curried into the parent DOG coin.
     pub parent_amount: u64,
-    pub prev_coin_id: Bytes32,
     /// The running total of the previous coins in the ring, minus the amounts they created.
     pub prev_subtotal: i128,
-    pub next_coin_proof: CoinProof,
+    /// The inner puzzle hash of the next execution coin in the ring, which the subtotal is sent to.
+    pub next_inner_puzzle_hash: Bytes32,
 }
 
 /// A TAIL that can only issue tokens from DOG coins whose parent is the genesis coin.

@@ -365,11 +365,7 @@ fn parse_children_ignores_other_puzzles() -> Result<()> {
 /// subtotals matter, so anyone can make them huge. Wallets must still be able to parse the coins.
 #[test]
 fn wallet_can_parse_coins_with_huge_subtotals() -> Result<()> {
-    use chia_wallet_sdk::{
-        chia::{protocol::Bytes, puzzle_types::CoinProof},
-        clvm_traits::clvm_list,
-        driver::Spend,
-    };
+    use chia_wallet_sdk::{chia::protocol::Bytes, clvm_traits::clvm_list, driver::Spend};
     use dog::DogExecArgs;
 
     let mut sim = Simulator::new();
@@ -396,13 +392,8 @@ fn wallet_can_parse_coins_with_huge_subtotals() -> Result<()> {
         inner_spend.solution,
         1000,
         1000,
-        exec_coin.coin_id(),
         Bytes::new(huge),
-        CoinProof {
-            parent_coin_info: dog.coin.coin_id(),
-            inner_puzzle_hash: alice.puzzle_hash,
-            amount: 1000,
-        }
+        alice.puzzle_hash
     ))?;
     ctx.spend(exec_coin, Spend::new(exec_puzzle, exec_solution))?;
     submit(&mut sim, ctx, &[alice.sk.clone()])?;

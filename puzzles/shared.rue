@@ -8,16 +8,16 @@
 // exist.
 
 // The first byte of the messages that link the execution coins of a spend into a ring.
-// Inner puzzles can't send or receive coin to coin messages that start with this byte.
+// Inner puzzles can't send or receive messages with `RING_MODE` that start with this byte.
 export inline const RING_PREFIX: Bytes = 0xd0;
 
 // A message mode in which the sender commits to its puzzle hash, and the receiver to its coin id.
 // The DOG coin sends it to its execution coin, which proves that its parent is a DOG coin.
 export inline const DOG_TO_EXEC_MODE: Int = 0b010_111;
 
-// A message mode in which both the sender and receiver commit to their coin id.
+// A message mode in which the sender commits to nothing, and the receiver to its puzzle hash.
 // It's used for the ring of execution coins.
-export inline const RING_MODE: Int = 0b111_111;
+export inline const RING_MODE: Int = 0b000_010;
 
 // The tree hash of the compiled DOG coin puzzle (`puzzles/dist/dog.rue.hash`).
 //

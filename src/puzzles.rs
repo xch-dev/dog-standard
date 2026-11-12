@@ -15,8 +15,9 @@ use chia_wallet_sdk::{
     },
     clvm_traits::{FromClvm, ToClvm},
     clvm_utils::{ToTreeHash, TreeHash},
+    driver::{DriverError, SpendContext},
     puzzles::SINGLETON_TOP_LAYER_V1_1_HASH,
-    types::Mod,
+    types::{Conditions, Mod},
 };
 
 /// Decodes a hex string with a trailing newline at compile time.
@@ -246,7 +247,27 @@ impl GenesisByCoinIdTailArgs {
     pub fn new(genesis_coin_id: Bytes32) -> Self {
         Self { genesis_coin_id }
     }
+
+    /// The condition that the genesis coin must output to authorize a supply change for one of the
+    /// DOG coins it creates, which fixes the amount of that coin's execution coin.
+    pub fn authorization(
+        ctx: &mut SpendContext,
+        dog_coin_id: Bytes32,
+        supply_change: i128,
+        new_amount: u64,
+    ) -> Result<Conditions, DriverError> {
+        let receiver = ctx.alloc(&dog_coin_id)?;
+        Ok(Conditions::new().send_message(
+            GENESIS_AUTHORIZATION_MODE,
+            authorization_message(supply_change, new_amount).into(),
+            vec![receiver],
+        ))
+    }
 }
+
+/// The message mode with which the genesis coin authorizes an issuance for
+/// [`GenesisByCoinIdTailArgs`], from its coin id to the DOG coin's id.
+pub const GENESIS_AUTHORIZATION_MODE: u8 = 0b111_111;
 
 impl Mod for GenesisByCoinIdTailArgs {
     fn mod_reveal() -> Cow<'static, [u8]> {

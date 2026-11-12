@@ -70,6 +70,42 @@ fn issue_with(
     })
 }
 
+/// Like [`issue_with`], for a TAIL that is or wraps `genesis_by_coin_id`, so the parent coin also
+/// authorizes the issuance.
+fn issue_from_genesis(
+    ctx: &mut SpendContext,
+    parent: &BlsPairWithCoin,
+    tail: Spend,
+    owner: Bytes32,
+    amount: u64,
+) -> Result<Issued> {
+    let conditions = send(ctx, owner, amount)?;
+    let issuance = Dog::issue(
+        ctx,
+        parent.coin.coin_id(),
+        tail,
+        &metadata(),
+        &DogUris::default(),
+        amount,
+        conditions,
+    )?;
+    let authorization = GenesisByCoinIdTailArgs::authorization(
+        ctx,
+        issuance.eve.coin.coin_id(),
+        amount.into(),
+        amount,
+    )?;
+    StandardLayer::new(parent.pk).spend(
+        ctx,
+        parent.coin,
+        issuance.parent_conditions.extend(authorization),
+    )?;
+    Ok(Issued {
+        eve: issuance.eve,
+        dog: issuance.children[0],
+    })
+}
+
 /// Adds the spend of a DOG coin owned by `owner` that changes its amount by `delta` with the TAIL,
 /// and sends the result back to the owner. Returns the new coin, if there is one.
 fn change_supply(
@@ -748,7 +784,7 @@ mod burnable {
         let issuance_tail = ctx.curry(GenesisByCoinIdTailArgs::new(parent.coin.coin_id()))?;
         let tail = tail_without_solution(ctx, BurnableTailArgs::new(issuance_tail))?;
 
-        let issuance = issue_with(ctx, &parent, tail, alice.puzzle_hash, 1000)?;
+        let issuance = issue_from_genesis(ctx, &parent, tail, alice.puzzle_hash, 1000)?;
         submit(&mut sim, ctx, &[parent.sk])?;
 
         let dog = change_supply(ctx, &alice, issuance.dog, tail, -1)?.expect("a new coin");
@@ -773,7 +809,7 @@ mod burnable {
 
         let issuance_tail = ctx.curry(GenesisByCoinIdTailArgs::new(parent.coin.coin_id()))?;
         let tail = tail_without_solution(ctx, BurnableTailArgs::new(issuance_tail))?;
-        let issuance = issue_with(ctx, &parent, tail, alice.puzzle_hash, 1000)?;
+        let issuance = issue_from_genesis(ctx, &parent, tail, alice.puzzle_hash, 1000)?;
         submit(&mut sim, ctx, &[parent.sk])?;
 
         // Alice signs a spend that creates 500 from her 1000 tokens, which doesn't balance.
@@ -987,11 +1023,11 @@ mod delegated_tail {
         // signature, so it can only be used to issue from that coin.
         let genesis_tail = ctx.curry(GenesisByCoinIdTailArgs::new(parent.coin.coin_id()))?;
         let spend = delegated(ctx, tail, genesis_tail)?;
-        issue_with(ctx, &parent, spend, alice.puzzle_hash, 1000)?;
+        issue_from_genesis(ctx, &parent, spend, alice.puzzle_hash, 1000)?;
         submit(&mut sim, ctx, &[parent.sk, issuer.sk.clone()])?;
 
         let spend = delegated(ctx, tail, genesis_tail)?;
-        issue_with(ctx, &other, spend, alice.puzzle_hash, 1000)?;
+        issue_from_genesis(ctx, &other, spend, alice.puzzle_hash, 1000)?;
         assert_eq!(
             submit_err(&mut sim, ctx, &[other.sk, issuer.sk]),
             ErrorCode::AssertMyParentIdFailed

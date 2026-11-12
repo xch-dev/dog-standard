@@ -61,12 +61,13 @@ type Tail = fn(
 ```
 
 - An authorization should commit to the **new amount** as well as the supply change. A coin with a lineage proof can also be spent without one, which gives the same supply change a different new amount (`delta` instead of `amount + delta`). The standard TAILs sign or receive [`sha256(new_amount) + supply_change`](puzzles/tails/authorization.rue), so an authorization can only be used for the result it was made for.
+- **Every TAIL must commit to the new amount, unless no other coin of the asset can ever be in the same transaction.** The eve coin's spend isn't authenticated, so anyone who sees an issuance in the mempool can rebuild it with a larger delta and take the difference with another coin of the asset in the same ring, since the ring only checks the total. The driver's eve coins also assert their own amount, as a second line of defense.
 - The **inner puzzle hash** lets a TAIL require that tokens are issued into a particular puzzle, such as a [layer](#extending-dog) that restricts who can hold them, without a signature.
 - The **asset id** lets an authorization be tied to one asset, such as a signature that would otherwise be valid for every asset that uses the same key.
 
 The TAIL runs in the DOG coin's spend, so `AGG_SIG_ME` and `ASSERT_MY_*` conditions apply to the DOG coin. There are two standard TAILs:
 
-- [`genesis_by_coin_id`](puzzles/tails/genesis_by_coin_id.rue) asserts that the DOG coin's parent is the genesis coin, so tokens can only be issued once, and never melted. It doesn't require a signature, so the eve coin's inner puzzle must fix its own outputs, as the driver's quoted conditions do.
+- [`genesis_by_coin_id`](puzzles/tails/genesis_by_coin_id.rue) asserts that the DOG coin's parent is the genesis coin, and requires a message from the genesis coin with the supply change and new amount. The genesis coin can only be spent once, so tokens can only be issued once, and never melted. The parent coin outputs the message with `GenesisByCoinIdTailArgs::authorization`, which `Dog::single_issuance` does for you.
 - [`everything_with_signature`](puzzles/tails/everything_with_signature.rue) requires an `AGG_SIG_ME` signature of the supply change and new amount by a public key, so the key's owner can issue or melt at any time.
 
 There are also TAILs for other policies, each with its rules and caveats in its header comment:
@@ -117,7 +118,7 @@ The launcher id is the id of a 1 mojo coin with the launcher puzzle hash, so it'
 - **Locked:** the latest spend melted the singleton, so the metadata is final.
 - **Unlaunched:** there's an updater, but its launcher hasn't been spent. Wallets should show this as mutable, since the launcher can still be created by whoever controls its parent.
 
-The current state only needs one coin spend: the spend of the parent of the unspent singleton coin (which reveals the parent's state and the update, if any), or the spend that melted it. To find it, a wallet looks up the coins hinted with the launcher id (the driver hints every singleton coin after the eve with it) or follows the children of the launcher. The launcher's spend reveals the eve's state and owner in its solution, which are checked against the eve's puzzle hash, so the state is known before the singleton is ever spent. The full history is the lineage from the launcher's spend, and each revision says whether its spend published an update.
+The current state only needs one coin spend: the spend of the parent of the unspent singleton coin (which reveals the parent's state and the update, if any), or the spend that melted it. To find it, a wallet looks up the coins hinted with the launcher id (the driver hints every singleton coin after the eve with it) or follows the children of the launcher. Anyone can create coins hinted with the launcher id, which `resolve_metadata` rejects since they don't link back to the launcher, so a wallet should try every hinted coin and keep the one whose parent spend resolves, rather than the first one it finds. The launcher's spend reveals the eve's state and owner in its solution, which are checked against the eve's puzzle hash, so the state is known before the singleton is ever spent. The full history is the lineage from the launcher's spend, and each revision says whether its spend published an update.
 
 The resolver checks that each spend belongs to the committed launcher id (spends of another singleton are rejected) and that consecutive spends are linked, but not that they're on chain, so they must come from a full node.
 
@@ -286,6 +287,7 @@ After changing [`dog.rue`](puzzles/dog.rue), copy the new hash from `puzzles/dis
 | [`tails`](tests/tails.rs) | Issuing and melting with the other TAILs, and the supply changes they reject |
 | [`offers`](tests/offers.rs) | XCH for DOG, DOG for XCH, DOG for DOG, underpaying, paying with the wrong asset |
 | [`revocation`](tests/revocation.rs) | Issuing revocable DOGs, owner transfers, revoking without the owner, revoking several coins in a ring, revoking coins held by the settlement puzzle, offers, non-issuers can't revoke, revocation can't change supply, parsing children |
+| [`issuance_front_running`](tests/issuance_front_running.rs) | Rebuilding an issuance in the mempool with a larger delta is rejected, both by the eve coin and by the genesis TAIL |
 | [`attacks`](tests/attacks.rs) | Fake TAILs, negative and oversized outputs, forged DOG and execution coins, joining the ring, sending ring messages to the wrong coin, ring messages from inner puzzles, tampered solutions, replayed signatures |
 | [`metadata`](tests/metadata.rs) | Issuing with a metadata updater in one transaction, updating, transferring and locking it, non-owners and fake updaters, replacing the launcher's solution, decimals can't change, resolving the current metadata and history, costs |
 | [`properties`](tests/properties.rs) | Random balanced rings conserve supply, and unbalanced rings are rejected |

@@ -433,7 +433,12 @@ impl Dog {
             uris.image_uris.clone(),
             uris.data_uris.clone(),
         ))?;
-        let inner_spend = ctx.delegated_spend(conditions.remark(remark))?;
+        // Asserting the amount fixes the amount of the eve coin's execution coin. Otherwise, a TAIL
+        // that doesn't commit to the new amount would let anyone who sees the issuance in the
+        // mempool rebuild the eve coin's spend with a larger delta, and take the difference with
+        // another coin of the asset in the same ring.
+        let inner_spend =
+            ctx.delegated_spend(conditions.remark(remark).assert_my_amount(amount))?;
 
         let eve = Dog::new_with_hidden_puzzle_hash(
             parent_coin_id,
@@ -510,6 +515,26 @@ impl Dog {
         })
     }
 
+    /// Adds the message with which the parent coin authorizes an issuance for
+    /// [`GenesisByCoinIdTailArgs`] to the parent's conditions.
+    fn with_genesis_authorization(
+        ctx: &mut SpendContext,
+        issuance: DogIssuance,
+        amount: u64,
+    ) -> Result<DogIssuance, DogError> {
+        let authorization = GenesisByCoinIdTailArgs::authorization(
+            ctx,
+            issuance.eve.coin.coin_id(),
+            amount.into(),
+            amount,
+        )?;
+
+        Ok(DogIssuance {
+            parent_conditions: issuance.parent_conditions.extend(authorization),
+            ..issuance
+        })
+    }
+
     /// Like [`Dog::single_issuance`], but with a [`MetadataUpdater`] owned by `owner_puzzle_hash`
     /// (see [`Dog::issue_with_updater`]).
     pub fn single_issuance_with_updater(
@@ -523,7 +548,7 @@ impl Dog {
     ) -> Result<DogIssuance, DogError> {
         let tail = ctx.curry(GenesisByCoinIdTailArgs::new(parent_coin_id))?;
 
-        Self::issue_with_updater(
+        let issuance = Self::issue_with_updater(
             ctx,
             parent_coin_id,
             Spend::new(tail, NodePtr::NIL),
@@ -533,7 +558,9 @@ impl Dog {
             owner_puzzle_hash,
             amount,
             conditions,
-        )
+        )?;
+
+        Self::with_genesis_authorization(ctx, issuance, amount)
     }
 
     /// Issues tokens with a TAIL that only allows the parent coin to issue them, so that the
@@ -548,7 +575,7 @@ impl Dog {
     ) -> Result<DogIssuance, DogError> {
         let tail = ctx.curry(GenesisByCoinIdTailArgs::new(parent_coin_id))?;
 
-        Self::issue(
+        let issuance = Self::issue(
             ctx,
             parent_coin_id,
             Spend::new(tail, NodePtr::NIL),
@@ -556,7 +583,9 @@ impl Dog {
             uris,
             amount,
             conditions,
-        )
+        )?;
+
+        Self::with_genesis_authorization(ctx, issuance, amount)
     }
 
     /// Issues tokens with a TAIL that allows the owner of the public key to issue or melt tokens
@@ -596,7 +625,7 @@ impl Dog {
     ) -> Result<DogIssuance, DogError> {
         let tail = ctx.curry(GenesisByCoinIdTailArgs::new(parent_coin_id))?;
 
-        Self::issue_with_hidden_puzzle_hash(
+        let issuance = Self::issue_with_hidden_puzzle_hash(
             ctx,
             parent_coin_id,
             Spend::new(tail, NodePtr::NIL),
@@ -605,7 +634,9 @@ impl Dog {
             uris,
             amount,
             conditions,
-        )
+        )?;
+
+        Self::with_genesis_authorization(ctx, issuance, amount)
     }
 
     /// Issues revocable tokens with a TAIL that allows the owner of the public key to issue or

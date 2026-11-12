@@ -7,9 +7,14 @@
 use std::borrow::Cow;
 
 use chia_wallet_sdk::{
-    chia::{bls::PublicKey, protocol::Bytes32, puzzle_types::LineageProof},
+    chia::{
+        bls::PublicKey,
+        protocol::Bytes32,
+        puzzle_types::{LineageProof, singleton::SingletonStruct},
+    },
     clvm_traits::{FromClvm, ToClvm},
-    clvm_utils::TreeHash,
+    clvm_utils::{ToTreeHash, TreeHash},
+    puzzles::SINGLETON_TOP_LAYER_V1_1_HASH,
     types::Mod,
 };
 
@@ -66,6 +71,29 @@ puzzle!(
     EVERYTHING_WITH_SIGNATURE_TAIL_HASH,
     "everything_with_signature.rue"
 );
+puzzle!(
+    EVERYTHING_WITH_SINGLETON_TAIL,
+    EVERYTHING_WITH_SINGLETON_TAIL_HASH,
+    "everything_with_singleton.rue"
+);
+puzzle!(
+    CAPPED_SUPPLY_TAIL,
+    CAPPED_SUPPLY_TAIL_HASH,
+    "capped_supply.rue"
+);
+puzzle!(
+    SUPPLY_COUNTER_PUZZLE,
+    SUPPLY_COUNTER_PUZZLE_HASH,
+    "supply_counter.rue"
+);
+puzzle!(BURNABLE_TAIL, BURNABLE_TAIL_HASH, "burnable.rue");
+puzzle!(
+    ISSUANCE_DEADLINE_TAIL,
+    ISSUANCE_DEADLINE_TAIL_HASH,
+    "issuance_deadline.rue"
+);
+puzzle!(DELEGATED_TAIL, DELEGATED_TAIL_HASH, "delegated_tail.rue");
+puzzle!(MULTISIG_TAIL, MULTISIG_TAIL_HASH, "multisig.rue");
 
 /// The curried argument that the DOG coins and execution coins of an asset have in common.
 ///
@@ -242,11 +270,7 @@ impl EverythingWithSignatureTailArgs {
     ///
     /// Never, since an integer can always be allocated.
     pub fn message(supply_change: i128) -> Vec<u8> {
-        let mut allocator = chia_wallet_sdk::clvmr::Allocator::new();
-        let ptr = supply_change
-            .to_clvm(&mut allocator)
-            .expect("an integer can always be allocated");
-        allocator.atom(ptr).as_ref().to_vec()
+        supply_change_message(supply_change)
     }
 }
 
@@ -258,4 +282,268 @@ impl Mod for EverythingWithSignatureTailArgs {
     fn mod_hash() -> TreeHash {
         EVERYTHING_WITH_SIGNATURE_TAIL_HASH
     }
+}
+
+/// The canonical CLVM encoding of a supply change, which is the message that TAILs sign or receive.
+///
+/// # Panics
+///
+/// Never, since an integer can always be allocated.
+pub fn supply_change_message(supply_change: i128) -> Vec<u8> {
+    let mut allocator = chia_wallet_sdk::clvmr::Allocator::new();
+    let ptr = supply_change
+        .to_clvm(&mut allocator)
+        .expect("an integer can always be allocated");
+    allocator.atom(ptr).as_ref().to_vec()
+}
+
+/// The tree hash of the singleton struct for a launcher id, as curried into the singleton TAILs.
+fn singleton_struct_hash(launcher_id: Bytes32) -> Bytes32 {
+    SingletonStruct::new(launcher_id).tree_hash().into()
+}
+
+/// The message mode with which a singleton authorizes a supply change, from its puzzle hash to the
+/// DOG coin's id.
+pub const SINGLETON_AUTHORIZATION_MODE: u8 = 0b010_111;
+
+/// A TAIL that allows any supply change authorized by a singleton.
+///
+/// The singleton sends a message with the mode [`SINGLETON_AUTHORIZATION_MODE`] to the DOG coin's id,
+/// containing [`supply_change_message`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToClvm, FromClvm)]
+#[clvm(curry)]
+pub struct EverythingWithSingletonTailArgs {
+    pub singleton_mod_hash: Bytes32,
+    pub singleton_struct_hash: Bytes32,
+}
+
+impl EverythingWithSingletonTailArgs {
+    pub fn new(launcher_id: Bytes32) -> Self {
+        Self {
+            singleton_mod_hash: SINGLETON_TOP_LAYER_V1_1_HASH.into(),
+            singleton_struct_hash: singleton_struct_hash(launcher_id),
+        }
+    }
+}
+
+impl Mod for EverythingWithSingletonTailArgs {
+    fn mod_reveal() -> Cow<'static, [u8]> {
+        Cow::Borrowed(&EVERYTHING_WITH_SINGLETON_TAIL)
+    }
+
+    fn mod_hash() -> TreeHash {
+        EVERYTHING_WITH_SINGLETON_TAIL_HASH
+    }
+}
+
+/// The solution of [`EverythingWithSingletonTailArgs`], after the supply change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToClvm, FromClvm)]
+#[clvm(list)]
+pub struct EverythingWithSingletonTailSolution {
+    /// The singleton's current inner puzzle hash.
+    pub singleton_inner_puzzle_hash: Bytes32,
+}
+
+/// A TAIL that allows supply changes authorized by a singleton whose inner puzzle is a
+/// [`SupplyCounterArgs`] with the cap, so no more than the cap can ever be issued in total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToClvm, FromClvm)]
+#[clvm(curry)]
+pub struct CappedSupplyTailArgs {
+    pub singleton_mod_hash: Bytes32,
+    pub singleton_struct_hash: Bytes32,
+    pub counter_mod_hash: Bytes32,
+    pub cap: u64,
+}
+
+impl CappedSupplyTailArgs {
+    pub fn new(launcher_id: Bytes32, cap: u64) -> Self {
+        Self {
+            singleton_mod_hash: SINGLETON_TOP_LAYER_V1_1_HASH.into(),
+            singleton_struct_hash: singleton_struct_hash(launcher_id),
+            counter_mod_hash: SUPPLY_COUNTER_PUZZLE_HASH.into(),
+            cap,
+        }
+    }
+}
+
+impl Mod for CappedSupplyTailArgs {
+    fn mod_reveal() -> Cow<'static, [u8]> {
+        Cow::Borrowed(&CAPPED_SUPPLY_TAIL)
+    }
+
+    fn mod_hash() -> TreeHash {
+        CAPPED_SUPPLY_TAIL_HASH
+    }
+}
+
+/// The solution of [`CappedSupplyTailArgs`], after the supply change. It's the state of the supply
+/// counter singleton when it authorizes the supply change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToClvm, FromClvm)]
+#[clvm(list)]
+pub struct CappedSupplyTailSolution {
+    pub issued: u64,
+    pub owner_puzzle_hash: Bytes32,
+}
+
+/// The inner puzzle of the singleton for [`CappedSupplyTailArgs`]. It counts the positive supply
+/// changes that the owner authorizes, and can't authorize more than the cap in total.
+///
+/// Its solution is passed to the owner's puzzle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToClvm, FromClvm)]
+#[clvm(curry)]
+pub struct SupplyCounterArgs<I> {
+    pub mod_hash: Bytes32,
+    pub cap: u64,
+    pub issued: u64,
+    pub owner: I,
+}
+
+impl<I> SupplyCounterArgs<I> {
+    pub fn new(cap: u64, issued: u64, owner: I) -> Self {
+        Self {
+            mod_hash: SUPPLY_COUNTER_PUZZLE_HASH.into(),
+            cap,
+            issued,
+            owner,
+        }
+    }
+}
+
+impl SupplyCounterArgs<TreeHash> {
+    /// The puzzle hash of a supply counter, which is the singleton's inner puzzle hash.
+    pub fn puzzle_hash(cap: u64, issued: u64, owner_puzzle_hash: Bytes32) -> TreeHash {
+        Self::new(cap, issued, owner_puzzle_hash.into()).curry_tree_hash()
+    }
+}
+
+impl<I> Mod for SupplyCounterArgs<I> {
+    fn mod_reveal() -> Cow<'static, [u8]> {
+        Cow::Borrowed(&SUPPLY_COUNTER_PUZZLE)
+    }
+
+    fn mod_hash() -> TreeHash {
+        SUPPLY_COUNTER_PUZZLE_HASH
+    }
+}
+
+/// A TAIL that allows any negative supply change, and passes the rest to the issuance TAIL.
+///
+/// Its solution is passed to the issuance TAIL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToClvm, FromClvm)]
+#[clvm(curry)]
+pub struct BurnableTailArgs<T> {
+    pub issuance_tail: T,
+}
+
+impl<T> BurnableTailArgs<T> {
+    pub fn new(issuance_tail: T) -> Self {
+        Self { issuance_tail }
+    }
+}
+
+impl<T> Mod for BurnableTailArgs<T> {
+    fn mod_reveal() -> Cow<'static, [u8]> {
+        Cow::Borrowed(&BURNABLE_TAIL)
+    }
+
+    fn mod_hash() -> TreeHash {
+        BURNABLE_TAIL_HASH
+    }
+}
+
+/// A TAIL that passes every supply change to another TAIL, but only allows issuing tokens before
+/// the deadline, which is a Unix timestamp.
+///
+/// Its solution is passed to the other TAIL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToClvm, FromClvm)]
+#[clvm(curry)]
+pub struct IssuanceDeadlineTailArgs<T> {
+    pub deadline: u64,
+    pub tail: T,
+}
+
+impl<T> IssuanceDeadlineTailArgs<T> {
+    pub fn new(deadline: u64, tail: T) -> Self {
+        Self { deadline, tail }
+    }
+}
+
+impl<T> Mod for IssuanceDeadlineTailArgs<T> {
+    fn mod_reveal() -> Cow<'static, [u8]> {
+        Cow::Borrowed(&ISSUANCE_DEADLINE_TAIL)
+    }
+
+    fn mod_hash() -> TreeHash {
+        ISSUANCE_DEADLINE_TAIL_HASH
+    }
+}
+
+/// A TAIL that runs any TAIL whose tree hash is signed by the public key with `AGG_SIG_UNSAFE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToClvm, FromClvm)]
+#[clvm(curry)]
+pub struct DelegatedTailArgs {
+    pub public_key: PublicKey,
+}
+
+impl DelegatedTailArgs {
+    pub fn new(public_key: PublicKey) -> Self {
+        Self { public_key }
+    }
+}
+
+impl Mod for DelegatedTailArgs {
+    fn mod_reveal() -> Cow<'static, [u8]> {
+        Cow::Borrowed(&DELEGATED_TAIL)
+    }
+
+    fn mod_hash() -> TreeHash {
+        DELEGATED_TAIL_HASH
+    }
+}
+
+/// The solution of [`DelegatedTailArgs`], after the supply change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToClvm, FromClvm)]
+#[clvm(list)]
+pub struct DelegatedTailSolution<P, S> {
+    /// The delegated TAIL, whose tree hash must be signed.
+    pub delegated_tail: P,
+    /// The solution of the delegated TAIL, which is passed after the supply change.
+    #[clvm(rest)]
+    pub delegated_solution: S,
+}
+
+/// A TAIL that allows any supply change signed by at least `threshold` of the public keys, with
+/// `AGG_SIG_ME` and [`supply_change_message`].
+#[derive(Debug, Clone, PartialEq, Eq, ToClvm, FromClvm)]
+#[clvm(curry)]
+pub struct MultisigTailArgs {
+    pub threshold: u64,
+    pub public_keys: Vec<PublicKey>,
+}
+
+impl MultisigTailArgs {
+    pub fn new(threshold: u64, public_keys: Vec<PublicKey>) -> Self {
+        Self {
+            threshold,
+            public_keys,
+        }
+    }
+}
+
+impl Mod for MultisigTailArgs {
+    fn mod_reveal() -> Cow<'static, [u8]> {
+        Cow::Borrowed(&MULTISIG_TAIL)
+    }
+
+    fn mod_hash() -> TreeHash {
+        MULTISIG_TAIL_HASH
+    }
+}
+
+/// The solution of [`MultisigTailArgs`], after the supply change.
+#[derive(Debug, Clone, PartialEq, Eq, ToClvm, FromClvm)]
+#[clvm(list)]
+pub struct MultisigTailSolution {
+    /// Whether each of the public keys signs, in the same order.
+    pub signers: Vec<bool>,
 }

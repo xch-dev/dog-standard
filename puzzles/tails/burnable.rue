@@ -1,0 +1,38 @@
+// A TAIL that lets holders melt their own tokens, and delegates issuance to another TAIL.
+//
+// Any negative supply change is allowed without conditions. Other supply changes are passed to the
+// curried issuance TAIL, with the rest of the solution. For example, wrapping `genesis_by_coin_id`
+// gives a fixed supply that can only go down, as tokens are burned.
+//
+// Melting still requires spending the DOG coin, so it needs the owner's inner puzzle, and a negative
+// supply change requires a lineage proof (without one, the supply change is the amount of the
+// execution coin, which can't be negative). Since the owner's inner puzzle usually signs the
+// execution coin's id with `AGG_SIG_ME`, and the id includes the amount after melting, only the owner
+// can melt their tokens.
+//
+// Inner puzzles that don't sign the execution coin's id can be melted by anyone, as far as their
+// other conditions allow, while they're in the mempool. For example, if a settlement payments coin
+// pays out less than its amount in an offer, the rest could be burned by anyone. That loses the
+// tokens, but nobody gains anything from it.
+
+type Tail = fn(
+    supply_change: Int,
+    new_amount: Int,
+    inner_puzzle_hash: Bytes32,
+    asset_id: Bytes32,
+    ...solution: Any,
+) -> List<Condition>;
+
+fn main(
+    issuance_tail: Tail,
+    supply_change: Int,
+    new_amount: Int,
+    inner_puzzle_hash: Bytes32,
+    asset_id: Bytes32,
+    ...solution: Any,
+) -> List<Condition> {
+    if supply_change < 0 {
+        return nil;
+    }
+    issuance_tail(supply_change, new_amount, inner_puzzle_hash, asset_id, ...solution)
+}

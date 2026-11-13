@@ -1,0 +1,33 @@
+// A TAIL that can only issue tokens once, from the coin with the given id.
+//
+// The DOG coin must be a child of the genesis coin, and the genesis coin must send it a message
+// with `authorization_message(supply_change, new_amount)`, from its coin id to the DOG coin's id.
+// The genesis coin can only be spent once, so the tokens it authorizes are the only ones that can
+// ever be issued, and no other coin can issue or melt tokens afterward.
+//
+// The message is what fixes the amount. Without it, anyone who sees the issuance in the mempool
+// could rebuild the eve coin's spend with a larger delta, and take the difference with another
+// coin of the same asset in the same ring. The eve coin's inner puzzle fixing its own outputs isn't
+// enough, since the ring only checks the total for the asset.
+
+import authorization::authorization_message;
+
+// The genesis coin commits to its coin id, and the DOG coin to its coin id.
+const AUTHORIZATION_MODE: Int = 0b111_111;
+
+fn main(
+    genesis_coin_id: Bytes32,
+    supply_change: Int,
+    new_amount: Int,
+    _inner_puzzle_hash: Bytes32,
+    _asset_id: Bytes32,
+) -> List<Condition> {
+    [
+        AssertMyParentId { parent_id: genesis_coin_id },
+        ReceiveMessage {
+            mode: AUTHORIZATION_MODE,
+            message: authorization_message(supply_change, new_amount),
+            sender: [genesis_coin_id],
+        },
+    ]
+}

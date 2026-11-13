@@ -1,0 +1,84 @@
+// Definitions shared by the DOG coin puzzle (`dog.rue`) and the DOG execution coin puzzle
+// (`dog_exec.rue`).
+//
+// A DOG token balance is held in a persistent DOG coin, which is always worth 0 mojos. Its token
+// amount is curried into its puzzle instead. Spending it creates an ephemeral execution coin worth
+// the token amount in mojos, which runs the inner puzzle and is spent in the same block. The mojos
+// of the execution coin are added and removed in the same spend bundle, so they never need to
+// exist.
+
+// The first byte of the messages that link the execution coins of a spend into a ring.
+// Inner puzzles can't send or receive messages with `RING_MODE` that start with this byte.
+export inline const RING_PREFIX: Bytes = 0xd0;
+
+// A message mode in which the sender commits to its puzzle hash, and the receiver to its coin id.
+// The DOG coin sends it to its execution coin, which proves that its parent is a DOG coin.
+export inline const DOG_TO_EXEC_MODE: Int = 0b010_111;
+
+// A message mode in which the sender commits to nothing, and the receiver to its puzzle hash.
+// It's used for the ring of execution coins.
+export inline const RING_MODE: Int = 0b000_010;
+
+// The tree hash of the compiled DOG coin puzzle (`puzzles/dist/dog.rue.hash`).
+//
+// The DOG coin puzzle needs the hash of the execution coin puzzle, and the other way around. The
+// DOG coin puzzle doesn't need its own hash, so the execution coin puzzle can include it as a
+// constant, rather than both puzzles currying it. A test checks that it's up to date.
+export inline const DOG_MOD_HASH: Bytes32 = 0x359fe09b29e4bda802b6d0ce0c7b8e2037c1e98ea867d9788b92d4194f8f1233;
+
+// The curried argument that every DOG coin and execution coin of an asset has in common.
+// It's a pair rather than a list, which makes it a little smaller.
+export struct Asset {
+    exec_mod_hash: Bytes32,
+    ...asset_id: Bytes32,
+}
+
+// The tree hash of the curried arguments `(c (q . ASSET) 1)`, which come after the arguments that
+// differ between coins. It's calculated once per spend, and used to calculate puzzle hashes.
+export inline fn asset_args_hash(asset: Asset) -> Bytes32 {
+    curried_arg_hash(4, tree_hash(asset), tree_hash_atom(1 as Bytes))
+}
+
+// The puzzle hash of a DOG coin with the given inner puzzle hash and token amount.
+// The curried arguments are `(INNER_PUZZLE_HASH AMOUNT ASSET)`.
+export fn dog_puzzle_hash(
+    asset_args_hash: Bytes32,
+    inner_puzzle_hash: Bytes32,
+    amount: Int,
+) -> Bytes32 {
+    curried_arg_hash(
+        2,
+        DOG_MOD_HASH,
+        curried_arg_hash(
+            4,
+            tree_hash_atom(inner_puzzle_hash),
+            curried_arg_hash(4, tree_hash_atom(amount as Bytes), asset_args_hash),
+        ),
+    )
+}
+
+// The puzzle hash of an execution coin with the given inner puzzle hash.
+// The curried arguments are `(INNER_PUZZLE ASSET)`.
+// Unlike the DOG coin, the puzzle hash doesn't depend on the amount.
+export fn exec_puzzle_hash(
+    asset_args_hash: Bytes32,
+    exec_mod_hash: Bytes32,
+    inner_puzzle_hash: Bytes32,
+) -> Bytes32 {
+    curried_arg_hash(2, exec_mod_hash, curried_arg_hash(4, inner_puzzle_hash, asset_args_hash))
+}
+
+// The tree hash of `(op (q . value) rest)`, given the tree hashes of `value` and `rest`.
+//
+// With the `c` operator (4), it adds a curried argument to the arguments in `rest`. With the `a`
+// operator (2), it's the hash of a curried puzzle, with `value` as the mod and `rest` as the
+// curried arguments.
+fn curried_arg_hash(op: Int, value_hash: Bytes32, rest_hash: Bytes32) -> Bytes32 {
+    tree_hash_pair(
+        tree_hash_atom(op as Bytes),
+        tree_hash_pair(
+            tree_hash_pair(tree_hash_atom(1 as Bytes), value_hash),
+            tree_hash_pair(rest_hash, tree_hash_atom(nil)),
+        ),
+    )
+}

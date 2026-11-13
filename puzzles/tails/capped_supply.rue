@@ -1,0 +1,60 @@
+// A TAIL that allows supply changes authorized by a singleton, which can never issue more than a cap
+// in total.
+//
+// It's like `everything_with_singleton`, except that the singleton's inner puzzle must be the supply
+// counter (`supply_counter.rue`) with the curried cap. The supply counter adds up the positive
+// supply changes it authorizes, and can't authorize more than the cap in total. Melted tokens don't
+// free up room under the cap, so the cap is on the total ever issued.
+//
+// The solution is the counter's state: the amount issued so far, and the owner's puzzle hash. These
+// are only used to calculate the singleton's puzzle hash, so they must be correct for the message
+// to be received.
+//
+// The supply counter checks that the amount issued so far isn't negative each time it's spent, so it
+// doesn't matter which state the singleton is launched with. It can start with a positive amount, or
+// with another inner puzzle that later becomes a supply counter, but neither can allow more than the
+// cap to be issued.
+//
+// The message is `authorization_message(supply_change, new_amount)`, which ends with the supply
+// change, so the counter can add it up.
+//
+// Curried arguments:
+// - `singleton_mod_hash` is the hash of the singleton top layer v1.1.
+// - `singleton_struct_hash` is the tree hash of `(SINGLETON_MOD_HASH . (LAUNCHER_ID .
+//   SINGLETON_LAUNCHER_HASH))`.
+// - `counter_mod_hash` is the hash of `supply_counter.rue`.
+// - `cap` is the most that can ever be issued.
+
+import authorization::authorization_message;
+
+// The singleton commits to its puzzle hash, and the DOG coin to its coin id.
+const AUTHORIZATION_MODE: Int = 0b010_111;
+
+fn main(
+    singleton_mod_hash: Bytes32,
+    singleton_struct_hash: Bytes32,
+    counter_mod_hash: Bytes32,
+    cap: Int,
+    supply_change: Int,
+    new_amount: Int,
+    _inner_puzzle_hash: Bytes32,
+    _asset_id: Bytes32,
+    issued: Int,
+    owner_puzzle_hash: Bytes32,
+) -> List<Condition> {
+    let counter_puzzle_hash = curry_tree_hash(
+        counter_mod_hash,
+        [
+            tree_hash_atom(counter_mod_hash),
+            tree_hash_atom(cap as Bytes),
+            tree_hash_atom(issued as Bytes),
+            owner_puzzle_hash,
+        ],
+    );
+
+    [ReceiveMessage {
+        mode: AUTHORIZATION_MODE,
+        message: authorization_message(supply_change, new_amount),
+        sender: [curry_tree_hash(singleton_mod_hash, [singleton_struct_hash, counter_puzzle_hash])],
+    }]
+}

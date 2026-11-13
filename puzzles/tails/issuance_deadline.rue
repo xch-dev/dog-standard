@@ -1,0 +1,37 @@
+// A TAIL that only allows issuing tokens before a deadline, and delegates the rest to another TAIL.
+//
+// Every supply change is passed to the curried TAIL, with the rest of the solution. If the supply
+// change is positive, `ASSERT_BEFORE_SECONDS_ABSOLUTE` is added, so that tokens can only be issued
+// before the deadline (a Unix timestamp). Melting is allowed at any time, if the TAIL allows it.
+//
+// For example, wrapping `everything_with_signature` lets the issuer issue tokens during a
+// distribution period, after which the supply can only go down.
+//
+// The deadline is compared to the timestamp of the previous transaction block, so a transaction
+// can be included a short time after the deadline.
+
+type Tail = fn(
+    supply_change: Int,
+    new_amount: Int,
+    inner_puzzle_hash: Bytes32,
+    asset_id: Bytes32,
+    ...solution: Any,
+) -> List<Condition>;
+
+fn main(
+    deadline: Int,
+    tail: Tail,
+    supply_change: Int,
+    new_amount: Int,
+    inner_puzzle_hash: Bytes32,
+    asset_id: Bytes32,
+    ...solution: Any,
+) -> List<Condition> {
+    let conditions = tail(supply_change, new_amount, inner_puzzle_hash, asset_id, ...solution);
+
+    if supply_change > 0 {
+        return [AssertBeforeSecondsAbsolute { seconds: deadline }, ...conditions];
+    }
+
+    conditions
+}

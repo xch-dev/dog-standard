@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  puzzles:
+    name: Puzzles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rue from main
+        run: cargo install --locked --git https://github.com/xch-dev/rue rue-cli
+      - name: Check formatting
+        run: rue fmt --check puzzles
+      - name: Run Rue tests
+        run: rue test
+      - name: Check that the compiled puzzles are up to date
+        run: |
+          rue build --all --hash
+          git diff --exit-code puzzles/dist
+
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test

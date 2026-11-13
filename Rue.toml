@@ -1,0 +1,18 @@
+[compiler]
+version = "0.11.0"
+entrypoint = "puzzles"
+dist_dir = "puzzles/dist"
+
+[formatter]
+max_width = 100
+indent_width = 4
+
+# Every lint is an error, so that the committed bytecode is always lint-free. The groups cover
+# every lint except the ones listed after them.
+[lints]
+unused = "deny"
+style = "deny"
+suspicious = "deny"
+debug_statement = "deny"
+unknown_lint = "deny"
+unfulfilled_lint_expectation = "deny"

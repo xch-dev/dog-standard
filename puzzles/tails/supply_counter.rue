@@ -1,0 +1,180 @@
+// The inner puzzle of the singleton that authorizes supply changes for `capped_supply.rue`.
+//
+// It runs the owner's puzzle, and treats every `SEND_MESSAGE` with the mode `SENDER_PUZZLE |
+// RECEIVER_COIN` as an authorization of a supply change, since that's what the TAIL receives. The
+// message is the supply change, and the positive ones are added to the amount issued, which can't
+// exceed the cap. The owner can't send other messages with that mode, without them counting toward
+// the cap if they're positive.
+//
+// Consensus only accepts the canonical encodings of condition opcodes and message modes, so they
+// can't be written in a way that the comparisons here would miss.
+//
+// The owner's odd `CREATE_COIN` (the singleton's child) is wrapped in the supply counter, with the
+// new amount issued and the owner's puzzle hash from the condition, so the owner can change, but the
+// counter and the cap stay. The singleton can still be melted, after which nothing can be issued.
+//
+// Curried arguments:
+// - `mod_hash` is the hash of this puzzle.
+// - `cap` is the most that can ever be issued.
+// - `issued` is the total of the positive supply changes authorized so far.
+// - `owner` is the owner's puzzle. The whole solution is passed to it.
+
+import authorization::authorization_message;
+
+// The singleton commits to its puzzle hash, and the DOG coin to its coin id.
+inline const AUTHORIZATION_MODE: Int = 0b010_111;
+
+type Owner = fn(...solution: Any) -> List<Condition>;
+
+fn main(mod_hash: Bytes32, cap: Int, issued: Int, owner: Owner, ...args: Any) -> List<Condition> {
+    // Otherwise, a counter launched with a negative amount could issue more than the cap.
+    assert issued >= 0;
+
+    let conditions = owner(...args);
+    let new_issued = issued + authorized(conditions);
+    assert new_issued <= cap;
+
+    wrap_child(counter_hashes(mod_hash, cap, new_issued), conditions)
+}
+
+// The tree hashes of the curried arguments of the next supply counter, except for the owner.
+struct CounterHashes {
+    mod_hash: Bytes32,
+    mod_hash_hash: Bytes32,
+    cap_hash: Bytes32,
+    issued_hash: Bytes32,
+}
+
+fn counter_hashes(mod_hash: Bytes32, cap: Int, issued: Int) -> CounterHashes {
+    CounterHashes {
+        mod_hash,
+        mod_hash_hash: tree_hash_atom(mod_hash),
+        cap_hash: tree_hash_atom(cap as Bytes),
+        issued_hash: tree_hash_atom(issued as Bytes),
+    }
+}
+
+// The total of the positive supply changes authorized by the conditions.
+fn authorized(conditions: List<Condition>) -> Int {
+    if conditions is nil {
+        return 0;
+    }
+
+    inline let (condition, rest) = conditions;
+
+    let total = authorized(rest);
+
+    if condition is SendMessage {
+        return total + credit(condition.mode, condition.message);
+    }
+
+    total
+}
+
+// The amount that a message counts toward the cap.
+fn credit(mode: Int, message: Bytes) -> Int {
+    // The supply change is after the 32 byte hash of the new amount. A shorter message in this mode
+    // makes `substr` raise, which is fine, since no TAIL would accept it.
+    let supply_change = substr(message, 32) as Int;
+
+    if (mode == AUTHORIZATION_MODE) && (supply_change > 0) {
+        supply_change
+    } else {
+        0
+    }
+}
+
+// Wraps the odd `CREATE_COIN`, which is the singleton's child, in the supply counter.
+fn wrap_child(hashes: CounterHashes, conditions: List<Condition>) -> List<Condition> {
+    if conditions is nil {
+        return nil;
+    }
+
+    inline let (condition, rest) = conditions;
+
+    let wrapped_rest = wrap_child(hashes, rest);
+
+    if condition is CreateCoin {
+        return [wrap(hashes, condition), ...wrapped_rest];
+    }
+
+    [condition, ...wrapped_rest]
+}
+
+fn wrap(hashes: CounterHashes, create_coin: CreateCoin) -> CreateCoin {
+    if create_coin.amount % 2 == 0 {
+        return create_coin;
+    }
+
+    CreateCoin {
+        puzzle_hash: curry_tree_hash(
+            hashes.mod_hash,
+            [hashes.mod_hash_hash, hashes.cap_hash, hashes.issued_hash, create_coin.puzzle_hash],
+        ),
+        amount: create_coin.amount,
+        memos: create_coin.memos,
+    }
+}
+
+test fn positive_authorizations_are_counted() {
+    let coin_id = sha256("coin");
+
+    assert authorized([
+        SendMessage {
+            mode: AUTHORIZATION_MODE,
+            message: authorization_message(100, 0),
+            receiver: [coin_id],
+        },
+        Remark {},
+        SendMessage {
+            mode: AUTHORIZATION_MODE,
+            message: authorization_message(50, 0),
+            receiver: [coin_id],
+        },
+    ]) == 150;
+}
+
+test fn melts_and_other_messages_are_not_counted() {
+    let coin_id = sha256("coin");
+    let issue = authorization_message(100, 0);
+
+    // Melts, other modes, and received messages don't count. Messages in this mode that are too
+    // short to hold a supply change make the counter raise, since no TAIL would accept them.
+    assert authorized([
+        SendMessage {
+            mode: AUTHORIZATION_MODE,
+            message: authorization_message(-100, 0),
+            receiver: [coin_id],
+        },
+        SendMessage { mode: 0b111_111, message: issue, receiver: [coin_id] },
+        ReceiveMessage { mode: AUTHORIZATION_MODE, message: issue, sender: [coin_id] },
+    ]) == 0;
+}
+
+test fn only_odd_coins_are_wrapped() {
+    let mod_hash = sha256("counter");
+    let owner_puzzle_hash = sha256("owner");
+
+    let wrapped = wrap_child(
+        counter_hashes(mod_hash, 1000, 42),
+        [
+            CreateCoin { puzzle_hash: owner_puzzle_hash, amount: 2 },
+            CreateCoin { puzzle_hash: owner_puzzle_hash, amount: 1 },
+        ],
+    );
+
+    let counter_puzzle_hash = curry_tree_hash(
+        mod_hash,
+        [
+            tree_hash_atom(mod_hash),
+            tree_hash_atom(1000 as Bytes),
+            tree_hash_atom(42 as Bytes),
+            owner_puzzle_hash,
+        ],
+    );
+
+    assert tree_hash(wrapped) == tree_hash([
+        CreateCoin { puzzle_hash: owner_puzzle_hash, amount: 2 },
+        CreateCoin { puzzle_hash: counter_puzzle_hash, amount: 1 },
+    ]);
+}

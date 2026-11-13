@@ -1,0 +1,137 @@
+// An example inner puzzle layer that charges a fee on transfers, paid in the token itself.
+//
+// This is a proof of concept for DOG extensions, and hasn't been audited.
+//
+// The layer wraps an inner puzzle (such as the standard puzzle) that belongs to the holder. Every
+// coin the inner puzzle creates is wrapped in this layer again, so the fee applies to every future
+// holder. Whenever tokens leave the holder, the layer adds a coin for the issuer worth
+// `FEE_BASIS_POINTS / 10000` of them, rounded up.
+//
+// The fee is charged on the amount of this coin minus the amount it sends back to the same inner
+// puzzle (change), rather than on the amount it sends to others. Otherwise two holders could
+// bypass it by spending together: the sender's coin would create nothing, and the receiver's
+// coin would create the tokens as change, since the ring only checks the total.
+//
+// The issuer is exempt, so it can spend the fees it collects. Assets that use this layer must make
+// sure that every coin is issued into it (the TAIL or the eve coin's inner puzzle must enforce
+// that), since a coin of the same asset without the layer could join the ring and take the tokens.
+//
+// The execution coin's amount is the token amount, so the layer learns it with `ASSERT_MY_AMOUNT`,
+// just like it would for a CAT.
+
+inline const BASIS_POINTS: Int = 10000;
+
+// The tree hashes of the curried arguments that don't change between holders.
+struct Layer {
+    mod_hash: Bytes32,
+    mod_hash_hash: Bytes32,
+    issuer_puzzle_hash_hash: Bytes32,
+    fee_basis_points_hash: Bytes32,
+}
+
+fn main(
+    mod_hash: Bytes32,
+    issuer_puzzle_hash: Bytes32,
+    fee_basis_points: Int,
+    inner_puzzle: fn(...solution: Any) -> List<Condition>,
+    my_amount: Int,
+    inner_solution: Any,
+) -> List<Condition> {
+    let layer = Layer {
+        mod_hash,
+        mod_hash_hash: tree_hash_atom(mod_hash),
+        issuer_puzzle_hash_hash: tree_hash_atom(issuer_puzzle_hash),
+        fee_basis_points_hash: tree_hash_atom(fee_basis_points as Bytes),
+    };
+
+    let my_inner_puzzle_hash = tree_hash(inner_puzzle);
+    let wrapped = wrap(layer, my_inner_puzzle_hash, inner_puzzle(...inner_solution));
+    let conditions = [AssertMyAmount { amount: my_amount }, ...wrapped.conditions];
+
+    if my_inner_puzzle_hash == issuer_puzzle_hash {
+        return conditions;
+    }
+
+    let fee = fee(fee_basis_points, my_amount - wrapped.kept);
+
+    if fee == 0 {
+        return conditions;
+    }
+
+    [
+        CreateCoin {
+            puzzle_hash: layer_puzzle_hash(layer, issuer_puzzle_hash),
+            amount: fee,
+            memos: Memos { value: [issuer_puzzle_hash] },
+        },
+        ...conditions,
+    ]
+}
+
+// The fee for sending an amount to others, rounded up so that splitting a transfer into small
+// pieces doesn't avoid it.
+fn fee(fee_basis_points: Int, sent: Int) -> Int {
+    if sent > 0 {
+        (sent * fee_basis_points + BASIS_POINTS - 1) / BASIS_POINTS
+    } else {
+        0
+    }
+}
+
+// The puzzle hash of this layer around the given inner puzzle hash.
+// The curried arguments are `(MOD_HASH ISSUER_PUZZLE_HASH FEE_BASIS_POINTS INNER_PUZZLE)`.
+fn layer_puzzle_hash(layer: Layer, inner_puzzle_hash: Bytes32) -> Bytes32 {
+    curry_tree_hash(
+        layer.mod_hash,
+        [
+            layer.mod_hash_hash,
+            layer.issuer_puzzle_hash_hash,
+            layer.fee_basis_points_hash,
+            inner_puzzle_hash,
+        ],
+    )
+}
+
+struct Wrapped {
+    conditions: List<Condition>,
+
+    // The total amount of the coins sent back to the same inner puzzle.
+    kept: Int,
+}
+
+fn wrap(layer: Layer, my_inner_puzzle_hash: Bytes32, conditions: List<Condition>) -> Wrapped {
+    if conditions is nil {
+        return Wrapped { conditions: nil, kept: 0 };
+    }
+
+    inline let (condition, rest) = conditions;
+
+    let wrapped = wrap(layer, my_inner_puzzle_hash, rest);
+
+    if condition is CreateCoin {
+        let kept = if condition.puzzle_hash == my_inner_puzzle_hash {
+            wrapped.kept + condition.amount
+        } else {
+            wrapped.kept
+        };
+
+        let created = CreateCoin {
+            puzzle_hash: layer_puzzle_hash(layer, condition.puzzle_hash),
+            amount: condition.amount,
+            memos: condition.memos,
+        };
+
+        return Wrapped { conditions: [created, ...wrapped.conditions], kept };
+    }
+
+    Wrapped { conditions: [condition, ...wrapped.conditions], kept: wrapped.kept }
+}
+
+test fn fee_is_rounded_up() {
+    assert fee(100, 10000) == 100;
+    assert fee(100, 10001) == 101;
+    assert fee(100, 1) == 1;
+    assert fee(100, 0) == 0;
+    assert fee(100, -500) == 0;
+    assert fee(0, 10000) == 0;
+}

@@ -1,13 +1,42 @@
 [package]
 name = "dog"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+description = "DOG, a fungible token standard for Chia that doesn't need mojos to issue or hold tokens"
+license = "Apache-2.0"
 
 [dependencies]
-anyhow = "1.0.94"
-chia = "0.17.0"
-chia-wallet-sdk = "0.20.0"
-clvmr = "0.10.0"
+chia-wallet-sdk = { git = "https://github.com/xch-dev/chia-wallet-sdk", branch = "main" }
+clvm-traits = { version = "0.53.0", features = ["derive"] }
 hex = "0.4.3"
-hex-literal = "0.4.1"
-rstest = "0.23.0"
+thiserror = "2.0.17"
+
+[dev-dependencies]
+anyhow = "1.0.100"
+proptest = "1.7.0"
+rstest = "0.28.0"
+rue-compiler = "0.11.0"
+rue-options = "0.11.0"
+
+# Use the main branch of Rue everywhere, including for `compile_rue` in the Wallet SDK, so that the
+# puzzles are compiled and linted the same way as with the `rue` CLI built from main.
+[patch.crates-io]
+rue-compiler = { git = "https://github.com/xch-dev/rue", branch = "main" }
+rue-options = { git = "https://github.com/xch-dev/rue", branch = "main" }
+rue-lir = { git = "https://github.com/xch-dev/rue", branch = "main" }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+must_use_candidate = "allow"
+# Tests pass keys as `&[key.clone()]`, which reads better than `std::slice::from_ref(&key)`.
+cloned_ref_to_slice_refs = "allow"
+# `Dog` is a small `Copy` type that's passed by value like the Wallet SDK's `Cat`, even though the
+# optional hidden puzzle hash of revocable DOGs puts it just over the default limit.
+large_types_passed_by_value = "allow"

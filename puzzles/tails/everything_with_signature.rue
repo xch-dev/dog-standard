@@ -1,0 +1,17 @@
+// A TAIL that allows any supply change signed by the given public key.
+//
+// The signature is over `authorization_message(supply_change, new_amount)`, and with `AGG_SIG_ME`
+// it's also tied to the DOG coin being spent, so it can't be reused for another coin, another amount,
+// or to give the coin a different amount by leaving out its lineage proof.
+
+import authorization::authorization_message;
+
+fn main(
+    public_key: PublicKey,
+    supply_change: Int,
+    new_amount: Int,
+    _inner_puzzle_hash: Bytes32,
+    _asset_id: Bytes32,
+) -> List<Condition> {
+    [AggSigMe { public_key, message: authorization_message(supply_change, new_amount) }]
+}

@@ -161,7 +161,7 @@ The DOG coin only commits to the hash of its inner puzzle, so wallets recognise 
 
 The execution coin changes the inner puzzle's conditions in two ways:
 
-- Each `CREATE_COIN` is wrapped in the DOG coin puzzle with its amount curried, and created with 0 mojos. The amount must be between 0 and `u64::MAX`, and it's converted to canonical form. Memos are kept, but the puzzle hash changes with the amount, so wallets need a hint (usually the inner puzzle hash) to find the coin. The driver doesn't add hints, since the right hint depends on the inner puzzle.
+- Each `CREATE_COIN` is wrapped in the DOG coin puzzle with its amount curried, and created with 0 mojos. The amount must be between 0 and `u64::MAX`, and it's converted to canonical form. Memos are kept, so DOG coins are hinted and found the same way as CAT coins: the hint is the p2 puzzle hash (or the recipient, for a clawback), and a wallet reads the amount and inner puzzle hash from the parent execution coin's spend, which is what `Dog::parse_children` does. The driver doesn't add hints, since the right hint depends on the inner puzzle.
 - `SEND_MESSAGE` and `RECEIVE_MESSAGE` conditions with mode `0b000010` (from anyone to a puzzle hash) whose message starts with `0xd0` are rejected, since they could take the place of ring messages. All other conditions are passed through.
 
 ## Extending DOG
